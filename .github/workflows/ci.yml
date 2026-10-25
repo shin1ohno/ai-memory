@@ -1,0 +1,112 @@
+# ai-memory's required check. Every test runs through a Makefile target, so the test
+# definition lives in one protected place; this file adds what an agent-editable target
+# must not be able to weaken: the import-state gate and the per-suite count floors.
+#
+# Before the first import (C11) the tree holds none of the code, every target reports
+# "no ... yet" and the job passes. Once any file in IMPORT_STATE_FILES exists, all of
+# them must exist and every floor applies. Protected paths among them cannot be deleted
+# by an agent patch, so the pre-import state cannot be re-entered after the import.
+name: ai-memory-ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-memory-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ai-memory-ci:
+    name: ai-memory-ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      # The files whose presence means "imported". Five of them are on
+      # .github/agent-protected.txt: both MANIFESTs, auth-proxy/proxy.py,
+      # hooks/mirror-file-memory.rb and memory-mcp/test_client_policy.py.
+      IMPORT_STATE_FILES: >-
+        memory-mcp/MANIFEST
+        memory-keeper/MANIFEST
+        auth-proxy/proxy.py
+        hooks/mirror-file-memory.rb
+        memory-mcp/test_client_policy.py
+        memory-mcp/test_tags_and_ids.py
+        memory-mcp/test_tag_preservation.py
+        memory-keeper/test_merge_rules.py
+        hooks/test-mirror-file-memory.sh
+      #
+      # Minimum cases per suite, keyed by the suite's `=== RUN` line in `make test`.
+      SUITE_FLOORS: >-
+        {
+        "memory-mcp/test_tags_and_ids.py": {"pass": 17},
+        "memory-mcp/test_tag_preservation.py": {"pass": 45},
+        "memory-mcp/test_client_policy.py": {"pass": 111, "max_skip": 1},
+        "memory-keeper/test_merge_rules.py": {"pass": 29}
+        }
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      # The runner's preinstalled python3 and ruby are used directly: actions/setup-python
+      # and ruby/setup-ruby are not on the repository's Actions allow-list.
+      - name: Toolchain
+        run: |
+          python3 --version
+          ruby --version
+
+      - name: Import state
+        id: state
+        run: |
+          present=0 missing=""
+          for f in $IMPORT_STATE_FILES; do
+            if [ -f "$f" ]; then present=$((present + 1)); else missing="$missing $f"; fi
+          done
+          total=$(wc -w <<<"$IMPORT_STATE_FILES")
+          if [ "$present" -eq 0 ]; then
+            echo "pre-import: none of the $total import-state files exist; floors are not applied"
+            echo "imported=false" >> "$GITHUB_OUTPUT"
+          elif [ "$present" -eq "$total" ]; then
+            echo "imported: all $total import-state files exist; floors apply"
+            echo "imported=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::partial tree: $present of $total import-state files exist; missing:$missing"
+            exit 1
+          fi
+
+      - name: Distribution (MANIFEST files alone import)
+        run: make check-distribution
+
+      - name: Test suites
+        run: |
+          set -o pipefail
+          make test 2>&1 | tee "$RUNNER_TEMP/make-test.log"
+
+      - name: Suite count floors
+        run: |
+          if [ "${{ steps.state.outputs.imported }}" != "true" ]; then
+            echo "pre-import: no suites to count"
+            exit 0
+          fi
+          python3 .github/ci/check_floors.py "$RUNNER_TEMP/make-test.log"
+
+      - name: Proxy import
+        run: make test-proxy-import
+
+      - name: Module names do not shadow stdlib or dependencies
+        run: |
+          if [ "${{ steps.state.outputs.imported }}" != "true" ]; then
+            echo "pre-import: no MANIFEST to check"
+            exit 0
+          fi
+          for py in .venv/bin/python .venv-proxy/bin/python; do
+            "$py" .github/ci/check_module_names.py memory-mcp/MANIFEST memory-keeper/MANIFEST auth-proxy/proxy.py
+          done
+
+      - name: File-memory mirror hook suite
+        run: make test-mirror-hook
