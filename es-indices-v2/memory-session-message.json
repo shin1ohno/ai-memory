@@ -1,0 +1,99 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "codec": "best_compression",
+    "refresh_interval": "1s",
+    "analysis": {
+      "analyzer": {
+        "ja_en_hybrid": {
+          "type": "custom",
+          "tokenizer": "kuromoji_tokenizer",
+          "filter": [
+            "kuromoji_baseform",
+            "kuromoji_part_of_speech",
+            "cjk_width",
+            "lowercase",
+            "kuromoji_stemmer"
+          ]
+        }
+      }
+    }
+  },
+  "mappings": {
+    "dynamic": "strict",
+    "_meta": {
+      "schema": "session-message/1"
+    },
+    "_source": {
+      "excludes": [
+        "embedding"
+      ]
+    },
+    "properties": {
+      "session_key": {
+        "type": "keyword"
+      },
+      "session_id": {
+        "type": "keyword"
+      },
+      "host": {
+        "type": "keyword"
+      },
+      "cwd": {
+        "type": "keyword"
+      },
+      "interactive": {
+        "type": "boolean"
+      },
+      "uuid": {
+        "type": "keyword"
+      },
+      "parent_uuid": {
+        "type": "keyword"
+      },
+      "message_id": {
+        "type": "keyword"
+      },
+      "role": {
+        "type": "keyword"
+      },
+      "ts": {
+        "type": "date"
+      },
+      "is_sidechain": {
+        "type": "boolean"
+      },
+      "agent_id": {
+        "type": "keyword"
+      },
+      "text": {
+        "type": "text",
+        "analyzer": "ja_en_hybrid"
+      },
+      "tool_text": {
+        "type": "text",
+        "analyzer": "ja_en_hybrid"
+      },
+      "tool_names": {
+        "type": "keyword"
+      },
+      "embedding": {
+        "type": "dense_vector",
+        "dims": 1024,
+        "similarity": "cosine",
+        "index_options": {
+          "type": "int8_hnsw"
+        }
+      },
+      "embedding_status": {
+        "type": "keyword"
+      },
+      "line_offset": {
+        "type": "long"
+      },
+      "redact_version": {
+        "type": "keyword"
+      }
+    }
+  }
+}

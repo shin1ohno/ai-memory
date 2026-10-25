@@ -1,0 +1,20 @@
+[Unit]
+Description=Probe memory-keeper reconcile-loop health into a node_exporter textfile metric
+Documentation=https://github.com/shin1ohno/setup cookbooks/lxc-es-memory
+# ES is remote (192.168.1.77); this LXC does not run elasticsearch locally.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/memory-keeper-health.sh
+# Never let a slow/hung probe pile up across timer fires.
+TimeoutStartSec=30
+
+# The systemd_unit helper's start:false branch runs `systemctl enable` on this
+# unit; modern systemd (Debian 13) fails `enable` on a unit with no [Install]
+# section, which would abort the &&-chained mitamae activate. An idempotent
+# oneshot textfile writer is harmless to enable (one extra run at boot).
+[Install]
+WantedBy=multi-user.target

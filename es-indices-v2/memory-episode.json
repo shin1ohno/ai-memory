@@ -1,0 +1,39 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 1,
+    "analysis": {
+      "analyzer": {
+        "ja_en_hybrid": {
+          "type": "custom",
+          "tokenizer": "kuromoji_tokenizer",
+          "filter": ["kuromoji_baseform", "kuromoji_part_of_speech", "cjk_width", "lowercase", "kuromoji_stemmer"]
+        }
+      }
+    }
+  },
+  "mappings": {
+    "properties": {
+      "content":       {"type": "text", "analyzer": "ja_en_hybrid"},
+      "embedding":     {"type": "dense_vector", "dims": 1024, "similarity": "cosine",
+                        "index": true, "index_options": {"type": "int8_hnsw"}},
+      "memory_type":   {"type": "keyword"},
+      "tags":          {"type": "keyword"},
+      "entities":      {"type": "keyword"},
+      "provenance": {"properties": {
+        "agent":        {"type": "keyword"},
+        "session_id":   {"type": "keyword"},
+        "source_class": {"type": "keyword"},
+        "written_at":   {"type": "date"}
+      }},
+      "superseded_by": {"type": "keyword"},
+      "superseded_at": {"type": "date"},
+      "use_count":     {"type": "integer"},
+      "last_used_at":  {"type": "date"},
+      "content_hash":  {"type": "keyword"},
+      "derived_from":  {"type": "keyword"},
+      "expires_at":    {"type": "date"},
+      "promoted_to":   {"type": "keyword"}
+    }
+  }
+}

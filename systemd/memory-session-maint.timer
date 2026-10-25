@@ -1,0 +1,19 @@
+[Unit]
+Description=Run the session search C8 maintenance job daily
+
+[Timer]
+# Type=oneshot self-healing pattern (~/ManagedProjects/setup/.claude/rules/
+# infrastructure.md "systemd Timer Verification Gate"):
+#   OnBootSec         — first fire after cold boot
+#   OnActiveSec       — first fire after `systemctl restart` of this timer
+#   OnUnitInactiveSec — recurring fire, measured from the unit's deactivation
+# OnUnitInactiveSec, not OnUnitActiveSec: the service is Type=oneshot without
+# RemainAfterExit, so its active window is ~0 and "after last activation"
+# would leave the timer with Trigger: n/a.
+OnBootSec=10min
+OnActiveSec=10min
+OnUnitInactiveSec=1d
+Unit=memory-session-maint.service
+
+[Install]
+WantedBy=timers.target

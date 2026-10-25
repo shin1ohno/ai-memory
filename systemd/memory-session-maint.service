@@ -1,0 +1,24 @@
+[Unit]
+Description=Session search C8 maintenance — 365-day retention, purge-marker sweep, pending embeddings, re-mask
+Documentation=https://github.com/shin1ohno/setup docs/design/claude-session-search.md
+After=network-online.target memory-mcp-v2.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/es-memory/app-v2
+# ES credentials, embedding key, SESSION_SCOPE_POLICY and SESSION_ARCHIVE_* —
+# the same file as memory-mcp-v2.service, so the job sees exactly the server's
+# archive backend and ES. EnvironmentFile parses KEY=VALUE literally (no shell).
+EnvironmentFile=/opt/es-memory/memory-v2.env
+Environment=STATS_INDEX=memory-stats
+Environment=KEEPER_HOST=es-memory
+Environment=SESSION_MAINT_LOCK=/run/lock/memory-session-maint.lock
+# sessions_maint.py also takes its lock (a second run exits 0 at once), so a
+# long run only makes the next timer fire a no-op.
+ExecStart=/opt/es-memory/venv/bin/python /opt/es-memory/app-v2/sessions_maint.py run
+TimeoutStartSec=3600
+
+[Install]
+WantedBy=multi-user.target

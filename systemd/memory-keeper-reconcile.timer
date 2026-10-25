@@ -1,0 +1,19 @@
+[Unit]
+Description=Run the memory-keeper reconcile tick every ~60s
+
+[Timer]
+# Type=oneshot self-healing pattern (cf. memory-keeper-health.timer +
+# ~/.claude infrastructure rules):
+#   OnBootSec         — first fire after cold boot
+#   OnActiveSec       — first fire after `systemctl restart` (boot was long ago)
+#   OnUnitInactiveSec — recurring fire, measured from the unit's deactivation.
+# OnUnitInactiveSec (not OnUnitActiveSec) because the service is Type=oneshot
+# with no RemainAfterExit — its active window is ~0, so "after last activation"
+# would yield Trigger: n/a.
+OnBootSec=60s
+OnActiveSec=60s
+OnUnitInactiveSec=60s
+Unit=memory-keeper-reconcile.service
+
+[Install]
+WantedBy=timers.target
