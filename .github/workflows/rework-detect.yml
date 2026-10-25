@@ -1,0 +1,108 @@
+# [D] rework detection — applies the `rework` label that rework_rate_7d counts.
+#
+# When a pull request merges, look for the two explicit signals the pilot counts as rework
+# (scripts/detect_rework.py): a revert (GitHub's `Reverts owner/repo#N` body, or git's
+# `This reverts commit <sha>.`), or a declared `Reworks #N`. For each referenced PR that is a
+# merged agent PR, merged no more than 7 days before this one, label it `rework` and leave a
+# one-time comment naming the evidence.
+#
+# Deliberately NOT a signal: a later PR that quietly touches the same files. Rework counted
+# this way is a lower bound, by the pilot's definition (decided 2026-09-23).
+#
+# Known limit: a PR from a fork runs with a read-only token here and cannot label. The
+# pilot's reverts and reworks are same-repository branches; the privileged base-context PR trigger is not used
+# because it would widen the trust boundary for a metrics convenience.
+#
+# workflow_dispatch re-evaluates one already-merged PR, for an event this workflow missed.
+name: rework-detect
+
+on:
+  pull_request:
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "A merged pull request to evaluate as a possible revert / rework"
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: rework-detect
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      # PR text is untrusted input: it reaches disk through the API and files only, never
+      # through a ${{ }} expression inside a shell command.
+      - name: Collect the merged pull request
+        id: src
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_PR: ${{ github.event.pull_request.number }}
+          INPUT_PR: ${{ github.event.inputs.pr }}
+        run: |
+          set -euo pipefail
+          pr="${EVENT_PR:-$INPUT_PR}"
+          case "$pr" in ''|*[!0-9]*) echo "refusing non-numeric PR"; exit 1 ;; esac
+          gh api "repos/$REPO/pulls/$pr" > src.json
+          merged_at="$(jq -r '.merged_at // empty' src.json)"
+          [ -n "$merged_at" ] || { echo "PR #$pr is not merged; nothing to evaluate"; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; }
+          jq -r '(.title // "") + "\n\n" + (.body // "")' src.json > src-body.md
+          gh api "repos/$REPO/pulls/$pr/commits" --paginate --jq '.[].commit.message' > src-commits.txt
+          python3 spine-github/scripts/detect_rework.py refs \
+            --repo "$REPO" --body-file src-body.md --commits-file src-commits.txt > refs.txt
+          printf 'PR #%s merged %s; references:\n' "$pr" "$merged_at"; cat refs.txt || true
+          {
+            echo "skip=false"
+            echo "pr=$pr"
+            echo "merged_at=$merged_at"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Label the reworked agent pull requests
+        if: steps.src.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SRC_PR: ${{ steps.src.outputs.pr }}
+          SRC_MERGED: ${{ steps.src.outputs.merged_at }}
+        run: |
+          set -euo pipefail
+          [ -s refs.txt ] || { echo "no revert or rework reference"; exit 0; }
+          # Read the references on fd 3: a command in the loop body that reads stdin would
+          # otherwise consume the remaining lines and end the loop after one iteration.
+          while read -r what ref kind <&3; do
+            if [ "$what" = "sha" ]; then
+              target="$(gh api "repos/$REPO/commits/$ref/pulls" --jq '[.[] | select(.merged_at != null)][0].number // empty' || true)"
+              [ -n "$target" ] || { echo "sha $ref: no merged PR carries it; skip"; continue; }
+            else
+              target="$ref"
+            fi
+            [ "$target" != "$SRC_PR" ] || { echo "#$target references itself; skip"; continue; }
+            gh api "repos/$REPO/pulls/$target" > tgt.json 2>/dev/null || { echo "#$target: not a pull request; skip"; continue; }
+            tgt_merged="$(jq -r '.merged_at // empty' tgt.json)"
+            labels="$(jq -r '[.labels[].name] | join(",")' tgt.json)"
+            [ -n "$tgt_merged" ] || { echo "#$target: not merged; skip"; continue; }
+            printf '%s' "$labels" | tr ',' '\n' | grep -q '^agent:' || { echo "#$target: not an agent PR; skip"; continue; }
+            if printf '%s' "$labels" | tr ',' '\n' | grep -qE '^rework(:|$)'; then
+              echo "#$target: already labelled rework"; continue
+            fi
+            if ! hours="$(python3 spine-github/scripts/detect_rework.py within \
+                   --target-merged "$tgt_merged" --rework-merged "$SRC_MERGED")"; then
+              echo "#$target: ${hours}h between merges, outside the 7-day window; skip"; continue
+            fi
+            gh pr edit "$target" --repo "$REPO" --add-label rework
+            gh pr comment "$target" --repo "$REPO" --body "$(printf 'Counted as rework: #%s (%s) merged %sh after this pull request.\n\n<!-- rework-detect -->\n' "$SRC_PR" "$kind" "$hours")"
+            echo "#$target: labelled rework ($kind by #$SRC_PR, ${hours}h)"
+          done 3< refs.txt

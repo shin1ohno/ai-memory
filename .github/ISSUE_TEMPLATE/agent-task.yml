@@ -1,0 +1,147 @@
+name: Agent task
+description: Hand one task to an agentic implementation run. One task, one pull request.
+title: "[agent] "
+labels: ["agent-task"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This form is the Task Envelope. It is validated deterministically, so the
+        headings and their order matter — keep them as rendered.
+
+        Nothing runs when you submit. Validation comments on the issue, and a human
+        starts the run by applying the `agent:claude` or `agent:codex` label.
+
+  - type: input
+    id: title
+    attributes:
+      label: Title
+      description: One-line imperative summary. Becomes the pull request title.
+      placeholder: Cache the merchant lookup in the settlement reconciler
+    validations:
+      required: true
+
+  - type: dropdown
+    id: risk_tier
+    attributes:
+      label: Risk tier
+      description: |
+        T1 mechanical and reversible. T2 ordinary change inside one service.
+        T3 touches a contract, a privilege boundary, data, or money — T3 additionally
+        requires a design-note URL, allowed paths, and a rollback plan.
+      options:
+        - T1
+        - T2
+        - T3
+    validations:
+      required: true
+
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Engine
+      description: Which coding engine runs the implement node. Chosen per task.
+      options:
+        - claude
+        - codex
+    validations:
+      required: true
+
+  - type: input
+    id: profile
+    attributes:
+      label: Profile
+      description: Monorepo — the service or package this task belongs to. Single-service repo — leave blank.
+      placeholder: settlement
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What must become true, and why. Prose, not a task list.
+    validations:
+      required: true
+
+  - type: textarea
+    id: non_goals
+    attributes:
+      label: Non goals
+      description: One per line. Explicitly out of scope.
+      placeholder: |
+        - Do not change the reconciliation algorithm.
+        - Do not introduce a persistent cache.
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance criteria
+      description: One per line. Each must be checkable without reading the diff.
+      placeholder: |
+        - A batch with N lines and M distinct merchants issues exactly M lookups.
+        - Golden-file output is byte-identical.
+    validations:
+      required: true
+
+  - type: textarea
+    id: allowed_paths
+    attributes:
+      label: Allowed paths
+      description: |
+        One glob per line. The patch may touch nothing else — enforced as a required
+        check against the pull request's changed files. Required for T3.
+      placeholder: |
+        - services/settlement/**
+        - services/settlement/tests/**
+
+  - type: input
+    id: test_command
+    attributes:
+      label: Test command
+      description: The command the affected-tests node runs. Must exit non-zero on failure.
+      placeholder: make test-affected
+    validations:
+      required: true
+
+  - type: input
+    id: source_url
+    attributes:
+      label: Design note url
+      description: |
+        Link to the ADR, RFC, or design note that justifies this change. Required for T3 —
+        a T3 task with no written design note is a design task, not an implementation task.
+      placeholder: https://…
+
+  - type: textarea
+    id: context_refs
+    attributes:
+      label: Context refs
+      description: One path or URL per line. Files that actually constrain the change.
+
+  - type: textarea
+    id: rollback
+    attributes:
+      label: Rollback
+      description: How to undo this in production. Required for T3.
+
+  - type: textarea
+    id: import_from
+    attributes:
+      label: Import from
+      description: |
+        Only for an import task (L4). Leave empty otherwise. No agent runs: a trusted job copies
+        these files of another repository, byte for byte, at one commit, and opens the PR itself.
+        `repo: OWNER/NAME` and `ref: <40-hex commit>` (the pair must be in IMPORT_PINS), then one
+        `from -> to` per line. A trailing slash maps a whole directory. A destination on
+        `.github/`, `CLAUDE.md`, `AGENTS.md`, the Makefile or another protected path is refused.
+      placeholder: |
+        repo: OWNER/source
+        ref: 0123456789abcdef0123456789abcdef01234567
+        src/lib/ -> lib/
+        src/run.sh -> run.sh
+
+  - type: input
+    id: max_ci_fix_rounds
+    attributes:
+      label: Max ci fix rounds
+      description: Cap on agentic CI-fix attempts. Blueprint default is 2; you may lower it, never raise it.
+      placeholder: "2"
