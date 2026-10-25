@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/shin1ohno/ai-memory/blob/main/spine-github/schemas/task-envelope.schema.json",
+  "title": "Task Envelope v1",
+  "description": "The unit of work handed to an agentic implementation run. One envelope produces at most one pull request. The envelope is authored by a human, validated deterministically, and reproduced verbatim into the PR body so downstream metrics can be extracted without re-reading the source issue.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "envelope_version",
+    "task_id",
+    "title",
+    "risk_tier",
+    "engine",
+    "blueprint",
+    "goal",
+    "acceptance_criteria",
+    "test_command"
+  ],
+  "properties": {
+    "envelope_version": {
+      "const": 1,
+      "description": "Schema major version. Bumped only on a breaking field change; metrics.sh keys off this."
+    },
+    "task_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$",
+      "description": "Stable identifier for this task, unique per repository. GitHub spine: gh-<issue number>. Linear spine: the Linear issue identifier (e.g. ENG-482). Used as the dedup key so a re-run cannot open a second PR for the same task."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 120,
+      "description": "One-line imperative summary. Becomes the PR title after the title-prefix."
+    },
+    "risk_tier": {
+      "type": "string",
+      "enum": ["T1", "T2", "T3"],
+      "description": "Review tier. T1: mechanical, reversible, single-file-shaped. T2: ordinary feature or fix inside one service. T3: touches a contract, a privilege boundary, data, or money. See README section 6."
+    },
+    "engine": {
+      "type": "string",
+      "enum": ["claude", "codex"],
+      "description": "Which coding engine executes the implement node. Selected per task from day one; the two engines are compared on identical metrics."
+    },
+    "blueprint": {
+      "type": "string",
+      "enum": ["implement-v1"],
+      "description": "The node sequence that will run. Only implement-v1 exists in W1-2."
+    },
+    "profile": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,31}$",
+      "description": "Repository sub-target this task belongs to. Monorepo: the service or package name. Single-service repo: omit, or use the repo's own short name. Drives which test target the affected-tests node resolves."
+    },
+    "goal": {
+      "type": "string",
+      "minLength": 30,
+      "description": "What must become true, and why. Prose, not a task list. The agent is expected to reason from this rather than from the title."
+    },
+    "non_goals": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 3 },
+      "default": [],
+      "description": "Explicitly out of scope. The single highest-value field for keeping an agent inside the intended blast radius."
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 8 },
+      "description": "Observable conditions a reviewer can check without reading the diff. Each item must be falsifiable."
+    },
+    "allowed_paths": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "default": [],
+      "description": "Glob patterns the patch may touch. Empty means the repository default allowlist applies. Enforced by the envelope-guard required check against the PR's changed-file list, NOT by the agent's own restraint. Required (>= 1 entry) when risk_tier is T3.",
+      "examples": [["services/billing/**", "docs/adr/**"]]
+    },
+    "test_command": {
+      "type": "string",
+      "minLength": 3,
+      "description": "The command the affected-tests node runs. Repo-relative, no sudo, must exit non-zero on failure. Use the repo's affected-test target when it has one (e.g. make test-affected)."
+    },
+    "source_url": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://",
+      "description": "URL of the human-authored design note, ADR, or RFC that justifies the change. Required when risk_tier is T3: a T3 task without a written design note is a design task, not an implementation task."
+    },
+    "context_refs": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": [],
+      "description": "Paths or URLs the agent should read before writing code. Keep to files that actually constrain the change; AGENTS.md is already loaded as the index."
+    },
+    "rollback": {
+      "type": "string",
+      "description": "How to undo this change in production if it misbehaves. Free text; 'revert the PR' is an acceptable answer when it is actually true."
+    },
+    "max_ci_fix_rounds": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2,
+      "default": 2,
+      "description": "Hard cap on agentic CI-fix attempts. The blueprint constant is 2; a task may lower it, never raise it."
+    },
+    "import_from": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo", "ref", "map"],
+      "description": "Makes this an L4 import task: no agent runs. A trusted job copies the named files of another repository at one commit, by (mode, OID), and opens the PR itself (scripts/import_verify.py). The path grammar beyond these patterns (no `.`, `..` or `.git` component, a directory only maps to a directory, unique case-folded destinations, no protected destination) is checked by import_verify.grammar_errors, which the validator also runs.",
+      "properties": {
+        "repo": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$",
+          "description": "OWNER/NAME of the source. Must also be a line of vars.IMPORT_ALLOWED_REPOS."
+        },
+        "ref": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$",
+          "description": "The full commit SHA. No tag, no branch: the pair repo@ref must be a line of vars.IMPORT_PINS."
+        },
+        "map": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["from", "to"],
+            "properties": {
+              "from": { "type": "string", "pattern": "^[A-Za-z0-9._-][A-Za-z0-9._/-]*$" },
+              "to": { "type": "string", "pattern": "^[A-Za-z0-9._-][A-Za-z0-9._/-]*$" }
+            }
+          },
+          "description": "`from -> to` pairs. A trailing slash marks a directory, which maps every file under it."
+        }
+      }
+    },
+    "max_ai_credits": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Optional per-run AI Credit budget override passed to the runner. Omit to inherit the workflow default."
+    }
+  },
+  "allOf": [
+    {
+      "description": "T3 conditional rules: a T3 task must name its design note and must bound its blast radius explicitly.",
+      "if": {
+        "properties": { "risk_tier": { "const": "T3" } },
+        "required": ["risk_tier"]
+      },
+      "then": {
+        "required": ["source_url", "allowed_paths", "rollback"],
+        "properties": {
+          "allowed_paths": { "minItems": 1 }
+        }
+      }
+    }
+  ]
+}

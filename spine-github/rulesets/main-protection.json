@@ -1,0 +1,69 @@
+{
+  "_comment": [
+    "GitHub repository ruleset for the pilot repo's default branch. Apply with:",
+    "  gh api -X POST repos/shin1ohno/ai-memory/rulesets --input spine-github/rulesets/main-protection.json",
+    "Read back with:",
+    "  gh api repos/shin1ohno/ai-memory/rulesets --jq '.[] | {id, name, enforcement}'",
+    "",
+    "Filled for ai-memory: the CI check is ai-memory-ci (ai-memory's own test job, as",
+    "it appears in the checks list — the job name, not the workflow name). Every other",
+    "value is deliberate; the notes below say why.",
+    "",
+    "Security-floor mapping (README section 0, item 7):",
+    "  human review before merge      -> pull_request.required_approving_review_count = 1",
+    "  agent identity cannot approve  -> require_last_push_approval = true, bypass_actors = []",
+    "  feature branches only          -> deletion + non_fast_forward on the default branch",
+    "  envelope is binding            -> required_status_checks includes 'guard'",
+    "",
+    "'guard' is the job id of the required check in .github/workflows/envelope-guard.yml.",
+    "Rename the job and this context must be renamed with it, or the gate silently stops",
+    "being required."
+  ],
+  "name": "main protection (agentic pilot)",
+  "target": "branch",
+  "enforcement": "active",
+  "bypass_actors": [],
+  "conditions": {
+    "ref_name": {
+      "include": ["~DEFAULT_BRANCH"],
+      "exclude": []
+    }
+  },
+  "rules": [
+    {
+      "type": "deletion"
+    },
+    {
+      "type": "non_fast_forward"
+    },
+    {
+      "type": "required_linear_history"
+    },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 1,
+        "dismiss_stale_reviews_on_push": true,
+        "require_code_owner_review": false,
+        "require_last_push_approval": true,
+        "required_review_thread_resolution": true,
+        "allowed_merge_methods": ["squash"]
+      }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": true,
+        "do_not_enforce_on_create": false,
+        "required_status_checks": [
+          {
+            "context": "guard"
+          },
+          {
+            "context": "ai-memory-ci"
+          }
+        ]
+      }
+    }
+  ]
+}

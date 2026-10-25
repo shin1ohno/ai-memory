@@ -1,0 +1,254 @@
+# [D] AI review (node 9), Claude on a Claude subscription. Reviews every agent PR, whichever
+# engine implemented it (decided 2026-09-23): PRs Claude implemented get a self-review, PRs
+# Codex implemented get a cross-review.
+#
+# Inert until the repository variable W3_AI_REVIEW_ENABLED is set to true. Only
+# ci-dispatch.yml calls it, once per PR, after CI goes green.
+#
+#   agent    read-only token. Puts the task envelope, the PR diff and the PR body on disk,
+#            checks the PR head out under work/, and runs Claude Code inside awf with no
+#            GitHub access and permission mode `default`, so only the listed read tools and
+#            Write run. The agent's only output is .agent-out/review.json; any other file it
+#            touches is discarded with the runner.
+#   publish  deterministic, and trusts nothing the agent job produced except review.json:
+#            it re-reads the PR, its diff and its changed files from GitHub.
+#            agent_outputs.py turns review.json into the API payload: the event is
+#            hard-coded to COMMENT (the agent identity never approves, and a bot's blocking
+#            review would stall the merge on a judgement that belongs to the human reviewer),
+#            every comment must anchor to a changed file, and comments on lines outside the
+#            diff move into the review body. Then route_review.py decides from the posted
+#            comment count and the PR's ai_review_rounds counter whether the implementing
+#            engine gets an address round (cap 1).
+#   handoff  when either job fails on a PR that passed validation. ci-dispatch labelled the
+#            PR ai-reviewed before dispatching, so it never dispatches this review again: a
+#            failed review is either parked or handed over, never left silent. When the agent
+#            step itself failed on a usage or rate limit (classify_failure.py), label
+#            agent:waiting-quota and leave a claude-requeue marker, so that
+#            claude-requeue.yml dispatches the review again later; otherwise label
+#            needs-human and link the run.
+#
+# The review is posted before routing, in the same job, so the address node always starts
+# with the review threads already in place.
+name: claude-review
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "Pull request number to review"
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: claude-review-${{ inputs.pr }}
+  cancel-in-progress: false
+
+jobs:
+  agent:
+    # Dispatch-driven: whoever holds Actions: write can dispatch this from any ref with any
+    # inputs. Refuse every ref but the default branch, so the scripts and prompts that run
+    # here are always the reviewed ones.
+    if: vars.W3_AI_REVIEW_ENABLED == 'true' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    # CLAUDE_CODE_OAUTH_TOKEN is an environment secret of agent-claude (deployable from main only).
+    environment: agent-claude
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    outputs:
+      head_sha: ${{ steps.pr.outputs.head_sha }}
+      retry: ${{ steps.classify.outputs.retry }}
+    steps:
+      - name: Checkout the default branch (trusted scripts)
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: "[D] load the pull request and its envelope"
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr }}
+          TRUSTED_ISSUE_AUTHOR_IDS: ${{ vars.TRUSTED_ISSUE_AUTHOR_IDS }}
+        run: |
+          set -euo pipefail
+          case "$PR" in ''|*[!0-9]*) echo "::error::refusing non-numeric PR input"; exit 1 ;; esac
+          # One AI review per PR. ci-dispatch enforces it with the ai-reviewed label, but a
+          # hand-made dispatch skips ci-dispatch, so check the PR's own reviews too. This runs
+          # before head_sha is recorded, so the refusal does not trigger the handoff job.
+          reviewed="$(gh api "repos/$REPO/pulls/$PR/reviews" --paginate | jq -s '[.[][] | select(.user.login == "github-actions[bot]")] | length')"
+          if [ "${reviewed:-0}" -gt 0 ]; then
+            echo "::error::PR #$PR already has an AI review; refusing a second one"; exit 1
+          fi
+          bash spine-github/scripts/pr_context.sh "$PR" "$RUNNER_TEMP/ctx" "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/pr.out"
+          cat "$RUNNER_TEMP/pr.out" | tee -a "$GITHUB_OUTPUT"
+          printf 'PR #%s: %s diff lines\n' "$PR" "$(wc -l < "$RUNNER_TEMP/ctx/pr.diff")"
+
+      - name: Checkout the pull request head
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ steps.pr.outputs.head_sha }}
+          path: work
+          persist-credentials: false
+
+      - name: "[D] hand the context to the agent"
+        run: |
+          set -euo pipefail
+          mkdir -p work/.agent-out
+          cp "$RUNNER_TEMP"/ctx/{envelope.json,pr.diff,pr-body.md,changed-files.txt} work/.agent-out/
+
+      - name: "[D] AI review (Claude Code on the subscription, inside awf)"
+        id: agent
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_PROMPT_FILE: ${{ github.workspace }}/spine-github/prompts/review.md
+          CLAUDE_ALLOWED_TOOLS: "Read,Glob,Grep,Write,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(ls:*),Bash(cat:*)"
+          CLAUDE_PERMISSION_MODE: default
+          CLAUDE_MAX_TURNS: "20"
+          AGENT_TIMEOUT_MIN: "15"
+          AWF_ALLOW_DOMAINS: api.anthropic.com
+          AGENT_WORKDIR: ${{ github.workspace }}/work
+        run: bash spine-github/scripts/run_claude_sandboxed.sh
+
+      # Usage or rate limit (retry later) versus anything else (a human). The classifier is
+      # the default branch's copy; the agent worked under work/. It is the only reader of
+      # claude-result.json, which therefore never leaves this job.
+      - name: "[D] classify the agent failure"
+        id: classify
+        if: failure() && steps.agent.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          python3 spine-github/scripts/classify_failure.py \
+            --result work/.agent-out/claude-result.json --stderr work/.agent-out/claude-stderr.log \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: "[D] require the review file"
+        run: test -s work/.agent-out/review.json || { echo "::error::the agent wrote no review.json"; exit 1; }
+
+      - name: Upload the agent output
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: agent-out
+          path: |
+            work/.agent-out/review.json
+          retention-days: 7
+
+  publish:
+    needs: [agent]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+      issues: read
+      pull-requests: write
+    steps:
+      - name: Checkout the default branch (trusted scripts)
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Download the agent output
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: agent-out
+          path: ${{ runner.temp }}/agent-out
+
+      - name: "[D] validate and post the review (event COMMENT only)"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr }}
+          READ_SHA: ${{ needs.agent.outputs.head_sha }}
+          OUT: ${{ runner.temp }}/agent-out
+          TRUSTED_ISSUE_AUTHOR_IDS: ${{ vars.TRUSTED_ISSUE_AUTHOR_IDS }}
+        run: |
+          set -euo pipefail
+          case "$PR" in ''|*[!0-9]*) echo "::error::refusing non-numeric PR input"; exit 1 ;; esac
+          # A detector, not a defence: the review's text must not look like a credential. A
+          # hit fails the job, and handoff gives the PR to a human.
+          python3 spine-github/scripts/tripwire.py "$OUT/review.json"
+          bash spine-github/scripts/pr_context.sh "$PR" "$RUNNER_TEMP/ctx" "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/pr.out"
+          head_sha="$(sed -n 's/^head_sha=//p' "$RUNNER_TEMP/pr.out")"
+          if [ "$head_sha" != "$READ_SHA" ]; then
+            echo "::warning::the PR moved from $READ_SHA to $head_sha during the review; comments off the new diff move to the review body"
+          fi
+          python3 spine-github/scripts/agent_outputs.py review \
+            --in "$OUT/review.json" --changed-files "$RUNNER_TEMP/ctx/changed-files.txt" \
+            --diff "$RUNNER_TEMP/ctx/pr.diff" \
+            --out "$RUNNER_TEMP/payload.json" --route-out "$RUNNER_TEMP/route.json"
+          jq --arg sha "$head_sha" '. + {commit_id: $sha}' "$RUNNER_TEMP/payload.json" > "$RUNNER_TEMP/review.json"
+          gh api -X POST "repos/$REPO/pulls/$PR/reviews" --input "$RUNNER_TEMP/review.json" --jq '"posted " + .html_url'
+
+      - name: "[D] route the review"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -uo pipefail
+          gh api "repos/$REPO/pulls/$PR" --jq '.body // ""' > "$RUNNER_TEMP/pr-body.md"
+          decision="$(python3 spine-github/scripts/route_review.py \
+            --agent-output "$RUNNER_TEMP/route.json" --pr-body-file "$RUNNER_TEMP/pr-body.md" \
+            --out "$RUNNER_TEMP/pr-body.new.md")"
+          rc=$?
+          printf 'decision: %s (exit %s)\n' "$decision" "$rc"
+          set -e
+          case "$decision" in
+            none)
+              echo "no inline comments: nothing to address" ;;
+            cap)
+              gh pr edit "$PR" --repo "$REPO" --add-label needs-human
+              gh pr comment "$PR" --repo "$REPO" --body "$(printf 'The AI review left comments, and the address-review round cap is already used, so the remaining comments are for a human reviewer.\n\n<!-- ai-review-route -->\n')" ;;
+            address\ claude\ *|address\ codex\ *)
+              engine="$(printf '%s' "$decision" | cut -d' ' -f2)"
+              round="$(printf '%s' "$decision" | cut -d' ' -f3)"
+              case "$round" in ''|*[!0-9]*) echo "unroutable round '$round'"; exit 1 ;; esac
+              if [ "$engine" = claude ]; then target=claude-address-review.yml; else target=agent-address-review-codex.lock.yml; fi
+              # Record the increment BEFORE dispatching: if the dispatch fails, the loop
+              # stops early, which is the safe direction to be wrong in.
+              gh pr edit "$PR" --repo "$REPO" --body-file "$RUNNER_TEMP/pr-body.new.md"
+              printf 'dispatching %s for PR #%s round %s\n' "$target" "$PR" "$round"
+              gh workflow run "$target" --repo "$REPO" --ref "$DEFAULT_BRANCH" -f "pr=$PR" -f "round=$round" ;;
+            *)
+              echo "unroutable review: $decision"; exit 1 ;;
+          esac
+
+  handoff:
+    needs: [agent, publish]
+    if: failure() && needs.agent.outputs.head_sha != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Park the pull request for a retry, or hand it to a human
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RETRY: ${{ needs.agent.outputs.retry }}
+        run: |
+          set -euo pipefail
+          # A usage or rate limit parks the PR for claude-requeue.yml, which dispatches the
+          # review again. One marker per failed attempt. The label goes on first: if it cannot,
+          # fall through to the human hand-off rather than promise a retry.
+          if [ "$RETRY" = true ]; then
+            if gh api -X POST "repos/$REPO/issues/$PR/labels" -f 'labels[]=agent:waiting-quota' --silent; then
+              marker="$(jq -cn --arg pr "$PR" '{workflow: "claude-review.yml", inputs: {pr: $pr}}')"
+              gh pr comment "$PR" --repo "$REPO" --body "$(printf 'Claude hit a usage or rate limit; claude-requeue retries for up to 48 hours after the first failure (at most 48 attempts). Failed run: %s\n\n<!-- claude-requeue %s -->\n' "$RUN_URL" "$marker")"
+              exit 0
+            fi
+            echo "::warning::could not add agent:waiting-quota; handing the pull request to a human instead"
+          fi
+          gh api -X POST "repos/$REPO/issues/$PR/labels" -f 'labels[]=needs-human' --silent \
+            || echo "::warning::could not add needs-human; the comment below is the signal"
+          gh pr comment "$PR" --repo "$REPO" --body "$(printf 'The AI review run failed before it finished (%s), so this pull request needs a human reviewer.\n\n<!-- claude-review -->\n' "$RUN_URL")"

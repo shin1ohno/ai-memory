@@ -1,0 +1,12 @@
+auth-proxy/proxy.py
+memory-mcp/identity.py
+memory-mcp/policy_mcp.py
+systemd/memory-mcp-v2.service
+systemd/memory-v2-proxy.service
+Makefile
+memory-mcp/test_client_policy.py
+memory-mcp/MANIFEST
+memory-keeper/MANIFEST
+generate_env_v2.sh
+bin/register-memory-mirror
+hooks/mirror-file-memory.rb

@@ -1,0 +1,121 @@
+# [D] validate — authoring-time feedback on a task envelope.
+#
+# This is the fast loop for the human writing the task: it parses the issue body,
+# validates it against schemas/task-envelope.schema.json, writes the canonical envelope
+# JSON back into the issue body, and labels the issue valid/invalid.
+#
+# It deliberately does NOT apply the agent:<engine> label and does NOT start a run.
+# Two reasons:
+#   1. Events created with GITHUB_TOKEN do not start new workflow runs (GitHub Actions
+#      docs, "Triggering a workflow from a workflow": only workflow_dispatch and
+#      repository_dispatch always create runs). A label applied here would therefore not
+#      reach the agent workflow anyway.
+#   2. A human applying agent:claude / agent:codex is the intended authorization step.
+#      The agent workflow re-validates the envelope as its own first node, so validation
+#      here is convenience, never the gate.
+name: envelope-validate
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: envelope-validate-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    # Only issues written by a trusted author (TRUSTED_ISSUE_AUTHOR_IDS, numeric ids,
+    # comma-separated, no spaces) are handled at all: on a public repository a stranger's
+    # issue gets no label and no comment from this workflow. claude-implement re-checks the
+    # author with trust_gate.py, so this is courtesy, not the gate.
+    if: >-
+      contains(github.event.issue.labels.*.name, 'agent-task') &&
+      contains(format(',{0},', vars.TRUSTED_ISSUE_AUTHOR_IDS), format(',{0},', github.event.issue.user.id))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      # The issue body is untrusted input. It reaches disk through an environment
+      # variable and never through shell interpolation of ${{ ... }}.
+      - name: Materialise the issue body
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: printf '%s' "$ISSUE_BODY" > issue-body.md
+
+      - name: Validate the envelope
+        id: validate
+        env:
+          TASK_ID: gh-${{ github.event.issue.number }}
+        run: |
+          set -uo pipefail
+          if python3 spine-github/scripts/envelope_from_issue.py \
+               --body-file issue-body.md \
+               --task-id "$TASK_ID" \
+               --out envelope.json \
+               --emit none 2>validate.err; then
+            echo "valid=true" >> "$GITHUB_OUTPUT"
+          else
+            rc=$?
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          fi
+          cat validate.err || true
+
+      - name: Rewrite the issue body with the canonical envelope
+        if: steps.validate.outputs.valid == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TASK_ID: gh-${{ github.event.issue.number }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          python3 spine-github/scripts/envelope_from_issue.py \
+            --body-file issue-body.md \
+            --task-id "$TASK_ID" \
+            --emit issue-body --quiet > new-body.md
+          # Skip the API call when nothing changed, so an edit does not ping watchers twice.
+          if cmp -s issue-body.md new-body.md; then
+            echo "issue body already canonical; no update"
+          else
+            gh issue edit "$ISSUE" --body-file new-body.md
+          fi
+
+      - name: Label and report
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+          VALID: ${{ steps.validate.outputs.valid }}
+        run: |
+          set -uo pipefail
+          if [ "$VALID" = "true" ]; then
+            risk=$(python3 -c 'import json;print(json.load(open("envelope.json"))["risk_tier"])')
+            gh issue edit "$ISSUE" \
+              --add-label "envelope:valid" \
+              --add-label "risk:$risk" \
+              --remove-label "envelope:invalid" || true
+            gh issue comment "$ISSUE" --body "$(printf 'Envelope is valid (risk %s). Apply `agent:claude` or `agent:codex` to start a run.\n\n<!-- envelope-validate -->\n' "$risk")"
+          else
+            gh issue edit "$ISSUE" \
+              --add-label "envelope:invalid" \
+              --remove-label "envelope:valid" || true
+            {
+              printf 'Envelope is not valid yet. Nothing has run.\n\n'
+              printf '```\n'
+              cat validate.err
+              printf '```\n\n'
+              printf 'Fix the sections above and the check re-runs on edit.\n'
+              printf '\n<!-- envelope-validate -->\n'
+            } > comment.md
+            gh issue comment "$ISSUE" --body-file comment.md
+          fi
+
+      - name: Fail the check when the envelope is invalid
+        if: steps.validate.outputs.valid != 'true'
+        run: exit 1

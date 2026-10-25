@@ -1,0 +1,98 @@
+# [D] requeue: start again the Claude runs that stopped on a usage or rate limit.
+#
+# The Claude nodes run on a subscription, and a subscription has usage limits that reset on
+# their own after a while. A run that hits one is not broken and needs no human, only a later
+# start. So when a node's agent step fails and classify_failure.py calls the failure
+# retryable, the node's failure handler labels the issue or PR `agent:waiting-quota` and
+# posts a comment with a hidden `<!-- claude-requeue {...} -->` marker naming the workflow and
+# its inputs. This workflow is the other half: once an hour, requeue.py reads every open item
+# with that label and starts its run again.
+#
+#   issue (claude-implement.yml)  re-applies `agent:claude` with the factory App's token
+#                                 (issues: write only), or GH_AW_CI_TRIGGER_TOKEN where no App
+#                                 is configured. The implement node starts on a `labeled`
+#                                 event, and a label change made with GITHUB_TOKEN raises no
+#                                 event. With neither, the issue stays waiting and the run
+#                                 prints an error. claude-implement admits an App-applied label
+#                                 only when this requeue marker parked the issue after a
+#                                 person started it, and only while the body is unchanged.
+#   pull request (fix CI, review, dispatches the marker's workflow on the default branch with
+#   address review)               GITHUB_TOKEN; workflow_dispatch is one of the two events
+#                                 GITHUB_TOKEN may start. Each of those workflows re-checks
+#                                 its own round cap, so a re-dispatch cannot add a round.
+#
+# Bounded: 48 hours after the first failure (the first marker's timestamp), or at 48 markers,
+# whichever comes first, requeue.py stops, labels the item needs-human and says so. Time is
+# the bound that matters: GitHub starts hourly schedules hours late and skips many (twice in
+# about ten hours in the sandbox, 2026-09-27), so attempts alone would stretch to about ten
+# days. Each failed attempt posts one marker. A missing marker, or one
+# that fails validation (workflow allowlist, exact input keys, digits only, the item's own
+# number), ends the same way. Markers count only when github-actions[bot] wrote them.
+#
+# Cost: this runs hourly whether or not anything is waiting — about 720 short runs a month.
+# The job needs only a checkout and a few API calls, so each run takes seconds.
+name: claude-requeue
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: claude-requeue
+  cancel-in-progress: false
+
+jobs:
+  requeue:
+    # A hand dispatch from any other ref is refused outright, not just pointed at main.
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    # AGENT_APP_PRIVATE_KEY is an environment secret of agent-app (deployable from main only).
+    environment: agent-app
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+      actions: write
+    steps:
+      # The default branch, also when someone dispatches this by hand from another ref. If an
+      # event carries no repository object the value is empty, and checkout falls back to the
+      # event's ref, which for a schedule is the default branch anyway.
+      - name: Checkout the default branch (trusted scripts)
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: "[D] mint the factory App token (this repository, one permission)"
+        id: app
+        if: vars.AGENT_APP_CLIENT_ID != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.AGENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+          repositories: ${{ github.event.repository.name }}
+          permission-issues: write
+
+      # The re-label token is used for nothing else: requeue.py hands it only to the two
+      # agent:claude label calls.
+      - name: "[D] restart the runs waiting on a usage or rate limit"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_CLIENT_ID: ${{ vars.AGENT_APP_CLIENT_ID }}
+          APP_SLUG: ${{ vars.AGENT_APP_SLUG }}
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+          PAT: ${{ secrets.GH_AW_CI_TRIGGER_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -n "$APP_CLIENT_ID" ]; then
+            [ -n "$APP_TOKEN" ] || { echo "::error::the App token is empty"; exit 1; }
+            export TRIGGER_TOKEN="$APP_TOKEN"; echo "re-labelling as the factory App (${APP_SLUG:-?}[bot])"
+          else
+            export TRIGGER_TOKEN="$PAT"; echo "re-labelling with GH_AW_CI_TRIGGER_TOKEN (no App configured)"
+          fi
+          python3 spine-github/scripts/requeue.py --repo "$REPO" --max-attempts 48 --max-hours 48

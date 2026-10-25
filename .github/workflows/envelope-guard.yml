@@ -1,0 +1,186 @@
+# [D] merge gate — two deterministic jobs on every agent pull request.
+#
+#   sync   (mutating, same-repo only) regenerates the PR's agent-envelope block from the
+#          canonical envelope on the source issue, adds `Fixes <ID>` for an issue that
+#          linear-intake mirrored from Linear, and applies the risk / blueprint labels. It
+#          does nothing for a source issue whose author is not in TRUSTED_ISSUE_AUTHOR_IDS:
+#          a stranger's issue never becomes an envelope, and guard then fails on the
+#          missing block.
+#   guard  (read-only, REQUIRED CHECK) verifies the resulting state: block present, labels
+#          agree with it, every changed file inside allowed_paths, T3 rules satisfied, and an
+#          agent PR touching no protected path (the default list and the base commit's
+#          .github/agent-protected.txt, under both names of a rename). An L4 import PR may add
+#          files on the repository's list when its import_verify marker names the current
+#          head. This is defence in depth for the App's token: a pull_request run uses the
+#          workflow file of the merge commit [推測], so it does not hold against a leaked key
+#          or a fork. The gate that authorises a merge is the code owner's approval.
+#
+# Two design notes worth keeping:
+#
+#   * The block is generated here, not typed by the agent. An agent that mistypes
+#     `risk_tier` would otherwise corrupt the metric the pilot exists to produce.
+#     sync also carries the ci_fix_rounds / ai_review_rounds counters forward, so the
+#     round caps survive a `synchronize` event.
+#   * sync and guard are jobs of ONE workflow rather than two workflows, because sync
+#     edits the PR body with GITHUB_TOKEN and that edit does not start a new workflow run
+#     (GitHub Actions docs, "Triggering a workflow from a workflow"). A separate guard
+#     workflow would keep grading the pre-sync state.
+#
+# guard is the job to register as a required status check — see rulesets/main-protection.json.
+name: envelope-guard
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
+
+permissions: {}
+
+concurrency:
+  group: envelope-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    # Fork PRs get a read-only token, and the pilot's agent PRs are same-repo feature
+    # branches by policy, so skipping forks costs nothing and avoids a guaranteed failure.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(toJSON(github.event.pull_request.labels.*.name), 'agent:')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: write
+    steps:
+      # The scripts come from the base commit, never from the PR: a pull_request run checks
+      # out the merge commit by default, and a PR that rewrites envelope_from_issue.py would
+      # otherwise run it with this job's pull-requests:write token. Neither job reads the
+      # PR's files from disk; everything about the PR comes from the API.
+      - name: Checkout the base commit
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Resolve the source issue
+        id: source
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -uo pipefail
+          printf '%s' "$PR_BODY" > pr-body.md
+          # gh-aw appends a closing keyword when the run was triggered from an issue
+          # (create-pull-request.auto-close-issue, default true). The branch name is the
+          # fallback for a manually dispatched run.
+          issue="$(grep -oiE '(fixes|closes|resolves) #[0-9]+' pr-body.md | head -1 | grep -oE '[0-9]+' || true)"
+          if [ -z "$issue" ]; then
+            issue="$(printf '%s' "$PR_BRANCH" | grep -oE '(^|[/-])gh-[0-9]+' | grep -oE '[0-9]+' | head -1 || true)"
+          fi
+          printf 'issue=%s\n' "$issue" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Regenerate the envelope block and labels
+        if: steps.source.outputs.issue != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ steps.source.outputs.issue }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          TRUSTED_ISSUE_AUTHOR_IDS: ${{ vars.TRUSTED_ISSUE_AUTHOR_IDS }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/issues/$ISSUE" > issue.json
+          if ! python3 spine-github/scripts/trust_gate.py author --issue-json issue.json; then
+            echo "::warning::issue #$ISSUE was not written by a trusted author; leaving the PR without an envelope block"
+            exit 0
+          fi
+          jq -r '.body // ""' issue.json > issue-body.md
+          python3 spine-github/scripts/envelope_from_issue.py \
+            --body-file issue-body.md \
+            --task-id "gh-$ISSUE" \
+            --out envelope.json \
+            --emit none --quiet
+          # --issue-json: for a mirror linear-intake created, the Linear ID goes into the PR
+          # body as `Fixes <ID>`, so Linear's GitHub integration links the PR and moves the
+          # Linear issue on merge. The ID comes from the bot-authored body, never from a label.
+          python3 spine-github/scripts/envelope_from_issue.py \
+            --body-file issue-body.md \
+            --task-id "gh-$ISSUE" \
+            --emit pr-body --existing-file pr-body.md --issue-json issue.json --quiet > pr-body.new.md
+          if cmp -s pr-body.md pr-body.new.md; then
+            echo "PR body already carries the current block"
+          else
+            gh pr edit "$PR_NUMBER" --repo "$REPO" --body-file pr-body.new.md
+          fi
+          risk=$(python3 -c 'import json;print(json.load(open("envelope.json"))["risk_tier"])')
+          blueprint=$(python3 -c 'import json;print(json.load(open("envelope.json"))["blueprint"])')
+          gh pr edit "$PR_NUMBER" --repo "$REPO" \
+            --add-label "risk:$risk" \
+            --add-label "blueprint:$blueprint"
+
+  guard:
+    needs: [sync]
+    # always() so a human PR (sync skipped) is still graded, with require-block off.
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      # pr_guard.py from the base commit, for the same reason as in sync: the PR under
+      # review must not supply the code that grades it.
+      - name: Checkout the base commit
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      # Untrusted PR-controlled text (body, labels) reaches disk via env only, never
+      # through shell interpolation of a ${{ }} expression.
+      - name: Collect pull request facts
+        env:
+          PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Read the body back from the API rather than the event payload: the sync job
+          # above may have rewritten it after this run started.
+          gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.body // ""' > pr-body.md
+          gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '[.labels[].name] | join(",")' > pr-labels.txt
+          gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename' > pr-files.txt
+          # status and previous_filename: a rename is graded under both of its names. gh prints
+          # each object of a --jq result as one compact line (gh api has no -c flag).
+          gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate \
+            --jq '.[] | {filename, status, previous_filename}' > pr-files.jsonl
+          gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.sha' > pr-head.txt
+          printf 'labels: %s\n' "$(cat pr-labels.txt)"
+          printf 'changed files: %s\n' "$(wc -l < pr-files.txt)"
+          printf 'event payload labels (for comparison): %s\n' "$PR_LABELS_JSON"
+
+      - name: Guard the envelope
+        env:
+          AGENT_PROTECTED_REQUIRED: ${{ vars.AGENT_PROTECTED_REQUIRED }}
+          IMPORT_PROTECTED_PINS: ${{ vars.IMPORT_PROTECTED_PINS }}
+        run: |
+          set -euo pipefail
+          labels="$(cat pr-labels.txt)"
+          if printf '%s' "$labels" | tr ',' '\n' | grep -q '^agent:'; then
+            require_block=true
+          else
+            require_block=false
+          fi
+          printf 'require_block=%s\n' "$require_block"
+          python3 spine-github/scripts/pr_guard.py \
+            --pr-body-file pr-body.md \
+            --changed-files-file pr-files.txt \
+            --labels "$labels" \
+            --require-block "$require_block" \
+            --files-json pr-files.jsonl \
+            --head-sha "$(cat pr-head.txt)" \
+            --agent-protected-file .github/agent-protected.txt \
+            --protected-required "${AGENT_PROTECTED_REQUIRED:-}" \
+            --import-pins "${IMPORT_PROTECTED_PINS:-}"

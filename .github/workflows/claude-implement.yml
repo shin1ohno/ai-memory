@@ -1,0 +1,465 @@
+# [A] implement, Claude engine, on a Claude subscription.
+#
+# Five jobs. Admission, the agent, the agent's tests and publishing are separate so that no
+# job that runs code the agent wrote ever holds a credential that can write to GitHub:
+#
+#   admit    deterministic. trust_gate.py decides whether this label may start a run: who
+#            applied it (a person with write access, or the factory App re-applying a
+#            requeued or Linear-mirrored task), who wrote the issue (TRUSTED_ISSUE_AUTHOR_IDS),
+#            whether the body is the one that was approved (an agent-approved sha256 marker,
+#            posted here when a person starts the run), and that no agent PR from this
+#            repository is open on the issue. Then it validates the envelope and outputs the
+#            title. A refusal is reported on the issue by the report job, never silent.
+#   agent    read-only token; runs Claude Code inside the Agent Workflow Firewall (awf) with
+#            only CLAUDE_CODE_OAUTH_TOKEN and an egress allowlist; uploads the patch and the PR
+#            description as an artifact. Nothing it produced is trusted afterwards.
+#   verify   no secret, no environment, read-only token. Checks the default branch out, applies
+#            the patch and runs lint and the envelope's test_command: the agent's code runs
+#            here, where there is nothing to steal.
+#   publish  deterministic; trusts nothing the agent job produced except the patch and the PR
+#            description. It re-derives the envelope from the issue in the event payload,
+#            refuses the patch unless check_patch.py passes against the files the patch itself
+#            touches (graded by grade_patch.sh from a copy of spine-github taken before the
+#            patch is applied, so a patch cannot grade itself), refuses text that looks like a
+#            credential (tripwire.py), commits the patch to a feature branch and pushes it with
+#            GITHUB_TOKEN, then opens and labels the draft PR with the factory App's token, or
+#            GH_AW_CI_TRIGGER_TOKEN where no App is configured. Never with GITHUB_TOKEN: GitHub
+#            then holds every pull_request run on the PR for manual approval (observed: CI and
+#            envelope-guard both `action_required`), including runs from later pushes made
+#            with another token.
+#   import   not a job but a mode of publish, for an envelope with `Import from` (an L4
+#            import task). agent and verify do not run at all: nothing an agent wrote is
+#            involved. publish runs import_verify.py from the default branch's copy, which
+#            fetches the pinned source commit, builds the commit from its (mode, OID) entries
+#            with git plumbing, grades it with check_patch.py and re-checks the commit itself,
+#            then pushes and opens the PR the same way, with one table row per imported file.
+#            admit applies the same four rules first, so rule (2), who wrote the task, holds
+#            for imports too.
+#   report   when admission refused the run, or a later job failed: comment on the issue with
+#            the run link and label it needs-human. Runs start at any hour, so a failure has to
+#            be visible where the requester looks, not only in the Actions tab. When the
+#            agent step itself failed on a usage or rate limit (classify_failure.py), the
+#            issue is labelled agent:waiting-quota instead and the comment carries a
+#            claude-requeue marker; claude-requeue.yml re-applies agent:claude later.
+#
+# Trigger: a person applies `agent:claude` to an issue that envelope-validate marked valid, or
+# the factory App re-applies it (see admit).
+name: claude-implement
+
+on:
+  issues:
+    types: [labeled]
+
+permissions: {}
+
+concurrency:
+  group: claude-implement-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  admit:
+    if: >-
+      github.event.label.name == 'agent:claude' &&
+      github.event.issue.state == 'open' &&
+      contains(github.event.issue.labels.*.name, 'envelope:valid')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    outputs:
+      title: ${{ steps.envelope.outputs.title }}
+      refused: ${{ steps.gate.outputs.refused }}
+      import: ${{ steps.envelope.outputs.import }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      # Every value the decision rests on is a repository variable, which the App's token
+      # (no Variables permission) cannot change.
+      - name: "[D] admit the run: who started it, who wrote the task, which body runs"
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TRUSTED_ISSUE_AUTHOR_IDS: ${{ vars.TRUSTED_ISSUE_AUTHOR_IDS }}
+          AGENT_APP_BOT_ID: ${{ vars.AGENT_APP_BOT_ID }}
+          AGENT_APP_SLUG: ${{ vars.AGENT_APP_SLUG }}
+          LINEAR_INTAKE_ENABLED: ${{ vars.LINEAR_INTAKE_ENABLED }}
+        run: |
+          set -euo pipefail
+          python3 spine-github/scripts/trust_gate.py admit --repo "$REPO" \
+            --event "$GITHUB_EVENT_PATH" --github-output "$GITHUB_OUTPUT"
+
+      - name: "[D] validate the task envelope"
+        id: envelope
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          TASK_ID: gh-${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ISSUE_BODY" > "$RUNNER_TEMP/issue-body.md"
+          python3 spine-github/scripts/envelope_from_issue.py \
+            --body-file "$RUNNER_TEMP/issue-body.md" --task-id "$TASK_ID" \
+            --out "$RUNNER_TEMP/envelope.json" --emit none
+          # The title is user text headed for $GITHUB_OUTPUT: strip line breaks so it cannot
+          # smuggle in a second output line.
+          title="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["title"])' "$RUNNER_TEMP/envelope.json" | tr -d '\r\n')"
+          printf 'title=%s\n' "$title" >> "$GITHUB_OUTPUT"
+          # An import task runs no agent. The grammar is checked again here, after the title
+          # is out, so a refusal reaches the issue through report.
+          if python3 -c 'import json,sys;sys.exit(0 if "import_from" in json.load(open(sys.argv[1])) else 1)' "$RUNNER_TEMP/envelope.json"; then
+            python3 spine-github/scripts/import_verify.py validate --envelope "$RUNNER_TEMP/envelope.json"
+            echo "import=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "import=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  agent:
+    needs: [admit]
+    if: needs.admit.outputs.import == 'false'
+    runs-on: ubuntu-latest
+    # CLAUDE_CODE_OAUTH_TOKEN is an environment secret of agent-claude (deployable from main only).
+    environment: agent-claude
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    outputs:
+      retry: ${{ steps.classify.outputs.retry }}
+    steps:
+      # No credentials left in .git/config: the agent works in this tree, and it has no
+      # business holding even a read token.
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: "[D] put the task envelope on disk"
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          TASK_ID: gh-${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          mkdir -p .agent-out
+          printf '%s' "$ISSUE_BODY" > "$RUNNER_TEMP/issue-body.md"
+          python3 spine-github/scripts/envelope_from_issue.py \
+            --body-file "$RUNNER_TEMP/issue-body.md" --task-id "$TASK_ID" \
+            --out .agent-out/envelope.json --emit none --quiet
+          test -f AGENTS.md || { echo "::error::AGENTS.md is missing; the agent has no index"; exit 1; }
+
+      - name: "[A] implement (Claude Code on the subscription, inside awf)"
+        id: agent
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_PROMPT_FILE: ${{ github.workspace }}/spine-github/prompts/implement.md
+          CLAUDE_ALLOWED_TOOLS: "Read,Edit,Write,Glob,Grep,Bash(git status),Bash(git diff:*),Bash(git log:*),Bash(ls:*),Bash(cat:*),Bash(make:*),Bash(python3:*)"
+          CLAUDE_MAX_TURNS: "30"
+          AGENT_TIMEOUT_MIN: "20"
+          AWF_ALLOW_DOMAINS: api.anthropic.com
+        run: bash spine-github/scripts/run_claude_sandboxed.sh
+
+      # Usage or rate limit (retry later) versus anything else (a human). The agent worked in
+      # this tree, so the classifier comes from the checked-out commit, not from a file the
+      # agent could have edited. It is the only reader of claude-result.json, which therefore
+      # never leaves this job.
+      - name: "[D] classify the agent failure"
+        id: classify
+        if: failure() && steps.agent.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          git show HEAD:spine-github/scripts/classify_failure.py > "$RUNNER_TEMP/classify_failure.py"
+          python3 "$RUNNER_TEMP/classify_failure.py" \
+            --result .agent-out/claude-result.json --stderr .agent-out/claude-stderr.log \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: "[D] collect the patch"
+        run: |
+          set -euo pipefail
+          git add -A -- . ':!.agent-out'
+          git diff --cached --no-renames --raw --no-abbrev > .agent-out/changed-files.txt
+          git diff --cached --binary > .agent-out/change.patch
+          printf 'changed files: %s\n' "$(wc -l < .agent-out/changed-files.txt)"
+          test -s .agent-out/change.patch || { echo "::error::the agent produced no change"; exit 1; }
+          test -s .agent-out/pr-body.md || printf 'The agent did not write a description.\n' > .agent-out/pr-body.md
+
+      - name: Upload the agent output
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: agent-out
+          path: |
+            .agent-out/changed-files.txt
+            .agent-out/change.patch
+            .agent-out/pr-body.md
+          retention-days: 7
+
+  # The agent's code runs here: no secret, no environment, a read-only token and no
+  # credentials in .git/config. The envelope comes from the issue in the event payload, read
+  # with the default branch's script before the patch touches the tree.
+  verify:
+    needs: [agent]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Download the agent output
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: agent-out
+          path: ${{ runner.temp }}/agent-out
+
+      - name: "[D] apply the patch"
+        env:
+          OUT: ${{ runner.temp }}/agent-out
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          TASK_ID: gh-${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$ISSUE_BODY" > "$RUNNER_TEMP/issue-body.md"
+          python3 spine-github/scripts/envelope_from_issue.py \
+            --body-file "$RUNNER_TEMP/issue-body.md" --task-id "$TASK_ID" \
+            --out "$RUNNER_TEMP/envelope.json" --emit none --quiet
+          git apply --index "$OUT/change.patch"
+
+      - name: "[D] lint"
+        run: |
+          set -euo pipefail
+          if make -n lint >/dev/null 2>&1; then make lint; else echo "no lint target; skipping"; fi
+
+      - name: "[D] affected tests"
+        run: |
+          set -euo pipefail
+          cmd="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["test_command"])' "$RUNNER_TEMP/envelope.json")"
+          printf 'running: %s\n' "$cmd"
+          sh -c "$cmd"
+
+  # Either the agent's graded patch or, for an import task, the commit import_verify.py
+  # builds. always() only so that the skipped agent and verify jobs of an import do not skip
+  # this one; admission still has to have succeeded.
+  publish:
+    needs: [admit, agent, verify]
+    if: >-
+      always() && needs.admit.result == 'success' &&
+      (needs.admit.outputs.import == 'true' ||
+       (needs.admit.outputs.import == 'false' && needs.agent.result == 'success' && needs.verify.result == 'success'))
+    runs-on: ubuntu-latest
+    # AGENT_APP_PRIVATE_KEY is an environment secret of agent-app (deployable from main only).
+    environment: agent-app
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      # No credentials left in .git/config: each token is handed to the one call that needs it.
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download the agent output
+        if: needs.admit.outputs.import == 'false'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: agent-out
+          path: ${{ runner.temp }}/agent-out
+
+      # Every check in this job runs from a copy of the default branch's spine-github taken
+      # here, before anything touches the tree: a patch that rewrites check_patch.py must be
+      # graded by the original, not by itself. This step has no token in its environment.
+      - name: "[D] refuse the patch unless it stays in bounds"
+        if: needs.admit.outputs.import == 'false'
+        env:
+          OUT: ${{ runner.temp }}/agent-out
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          TASK_ID: gh-${{ github.event.issue.number }}
+          AGENT_PROTECTED_REQUIRED: ${{ vars.AGENT_PROTECTED_REQUIRED }}
+        run: |
+          set -euo pipefail
+          cp -R spine-github "$RUNNER_TEMP/trusted"
+          printf '%s' "$ISSUE_BODY" > "$RUNNER_TEMP/issue-body.md"
+          python3 "$RUNNER_TEMP/trusted/scripts/envelope_from_issue.py" \
+            --body-file "$RUNNER_TEMP/issue-body.md" --task-id "$TASK_ID" \
+            --out "$RUNNER_TEMP/envelope.json" --emit none --quiet
+          # Graded from the patch itself on a throwaway index, not from the file list the
+          # agent job reported.
+          bash "$RUNNER_TEMP/trusted/scripts/grade_patch.sh" \
+            "$OUT/change.patch" "$RUNNER_TEMP/envelope.json" "$RUNNER_TEMP/graded.raw"
+          # A detector, not a defence: the agent's text and added lines must not look like a
+          # credential. A hit fails the job, and report hands the issue to a human.
+          python3 "$RUNNER_TEMP/trusted/scripts/tripwire.py" --patch "$OUT/change.patch" "$OUT/pr-body.md"
+
+      # D1: the import commit is built from the pinned source's own tree entries. The source
+      # is a public repository, so the fetch needs no credential; GH_TOKEN (read-only here)
+      # only names the PR that last changed each file in the body's table.
+      - name: "[D] build the import commit"
+        if: needs.admit.outputs.import == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          TASK_ID: gh-${{ github.event.issue.number }}
+          RUN_ID: ${{ github.run_id }}
+          IMPORT_ALLOWED_REPOS: ${{ vars.IMPORT_ALLOWED_REPOS }}
+          IMPORT_PINS: ${{ vars.IMPORT_PINS }}
+          IMPORT_PROTECTED_PINS: ${{ vars.IMPORT_PROTECTED_PINS }}
+          AGENT_PROTECTED_REQUIRED: ${{ vars.AGENT_PROTECTED_REQUIRED }}
+        run: |
+          set -euo pipefail
+          cp -R spine-github "$RUNNER_TEMP/trusted"
+          printf '%s' "$ISSUE_BODY" > "$RUNNER_TEMP/issue-body.md"
+          python3 "$RUNNER_TEMP/trusted/scripts/envelope_from_issue.py" \
+            --body-file "$RUNNER_TEMP/issue-body.md" --task-id "$TASK_ID" \
+            --out "$RUNNER_TEMP/envelope.json" --emit none --quiet
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -q -b "agent/gh-$ISSUE-$RUN_ID"
+          mkdir -p "$RUNNER_TEMP/agent-out"
+          python3 "$RUNNER_TEMP/trusted/scripts/import_verify.py" build \
+            --envelope "$RUNNER_TEMP/envelope.json" --issue "$ISSUE" --lookup-prs \
+            --body-out "$RUNNER_TEMP/agent-out/pr-body.md" --manifest-out "$RUNNER_TEMP/import-manifest.json"
+
+      # The first push stays on GITHUB_TOKEN: it starts no workflow, and the PR that follows
+      # is what must come from another identity.
+      - name: "[D] commit the patch to a feature branch"
+        id: branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+          TITLE: ${{ needs.admit.outputs.title }}
+          OUT: ${{ runner.temp }}/agent-out
+          RUN_ID: ${{ github.run_id }}
+          IMPORT: ${{ needs.admit.outputs.import }}
+        run: |
+          set -euo pipefail
+          branch="agent/gh-$ISSUE-$RUN_ID"
+          if [ "$IMPORT" = true ]; then
+            # Built and checked by the step above; re-check the commit once more from the
+            # trusted copy right before it leaves the runner.
+            test "$(git branch --show-current)" = "$branch"
+            python3 "$RUNNER_TEMP/trusted/scripts/import_verify.py" check-commit \
+              --manifest "$RUNNER_TEMP/import-manifest.json" --commit HEAD
+            auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+            echo "::add-mask::$auth"
+            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push -q origin "$branch"
+            echo "branch=$branch" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git apply --index "$OUT/change.patch"
+          # The same patch was graded against this same HEAD in the step above. Confirm the
+          # index names exactly the graded files; nothing from the patched tree is run here.
+          # Modes, OIDs and statuses too, in the very format grade_patch.sh graded.
+          git diff --cached --no-renames --raw --no-abbrev -z HEAD > "$RUNNER_TEMP/applied.raw"
+          if ! cmp -s "$RUNNER_TEMP/applied.raw" "$RUNNER_TEMP/graded.raw"; then
+            echo "::error::the applied patch differs from the graded one"
+            diff <(tr '\0' '\n' < "$RUNNER_TEMP/graded.raw") <(tr '\0' '\n' < "$RUNNER_TEMP/applied.raw") || true
+            exit 1
+          fi
+          git commit -q -m "agent(claude): $TITLE" -m "Implements #$ISSUE."
+          # persist-credentials is off, so authenticate this push alone.
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push -q origin "$branch"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+      # contents: read is not optional: `gh pr create` reads repository.defaultBranchRef over
+      # GraphQL, and a pull-requests-only token is refused with "Resource not accessible by
+      # integration" (observed on the sandbox, run 40196852685).
+      - name: "[D] mint the factory App token (this repository, open PRs only)"
+        id: app
+        if: vars.AGENT_APP_CLIENT_ID != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.AGENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+          repositories: ${{ github.event.repository.name }}
+          permission-pull-requests: write
+          permission-contents: read
+
+      - name: "[D] open the draft PR"
+        env:
+          APP_CLIENT_ID: ${{ vars.AGENT_APP_CLIENT_ID }}
+          APP_SLUG: ${{ vars.AGENT_APP_SLUG }}
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+          PAT: ${{ secrets.GH_AW_CI_TRIGGER_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+          TITLE: ${{ needs.admit.outputs.title }}
+          OUT: ${{ runner.temp }}/agent-out
+          BASE: ${{ github.event.repository.default_branch }}
+          BRANCH: ${{ steps.branch.outputs.branch }}
+        run: |
+          set -euo pipefail
+          # The App when one is configured (a failed mint has already failed this job), else
+          # the PAT, else stop: GITHUB_TOKEN would leave every check waiting for approval.
+          if [ -n "$APP_CLIENT_ID" ]; then
+            opener="$APP_TOKEN"; echo "opening the PR as the factory App (${APP_SLUG:-?}[bot])"
+          elif [ -n "$PAT" ]; then
+            opener="$PAT"; echo "opening the PR with GH_AW_CI_TRIGGER_TOKEN (no App configured)"
+          else
+            echo "::error::neither AGENT_APP_CLIENT_ID nor GH_AW_CI_TRIGGER_TOKEN is set; refusing to open a PR whose checks would wait for approval"
+            exit 1
+          fi
+          [ -n "$opener" ] || { echo "::error::the App token is empty"; exit 1; }
+          { cat "$OUT/pr-body.md"; printf '\n\nFixes #%s\n' "$ISSUE"; } > "$RUNNER_TEMP/pr-body.md"
+          url="$(GH_TOKEN="$opener" gh pr create --repo "$REPO" --draft --base "$BASE" --head "$BRANCH" \
+                  --title "[agent] $TITLE" --body-file "$RUNNER_TEMP/pr-body.md")"
+          echo "opened $url"
+          # Labels go on with the same token. envelope-guard's sync job decides from the
+          # labels in the event payload, and the `opened` payload has none yet; labels added
+          # with GITHUB_TOKEN raise no event, so sync would never run and guard would fail
+          # on a missing envelope block (observed on the first PAT-opened PR).
+          GH_TOKEN="$opener" gh pr edit "$url" --add-label agent:claude --add-label blueprint:implement-v1
+
+  report:
+    needs: [admit, agent, verify, publish]
+    if: failure() && (needs.admit.outputs.title != '' || needs.admit.outputs.refused != '')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Park the issue for a retry, or tell the requester the run failed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RETRY: ${{ needs.agent.outputs.retry }}
+          REFUSED: ${{ needs.admit.outputs.refused }}
+        run: |
+          set -euo pipefail
+          if [ -n "$REFUSED" ]; then
+            # trust_gate.py's reasons are fixed strings, never text from the issue.
+            gh issue comment "$ISSUE" --repo "$REPO" --body "$(printf 'The Claude implement run was refused before it started: %s (%s).\n\n<!-- claude-implement -->\n' "$REFUSED" "$RUN_URL")"
+            gh issue edit "$ISSUE" --repo "$REPO" --add-label needs-human \
+              || echo "::warning::could not add needs-human (create the label); the comment above is the signal"
+            exit 0
+          fi
+          # A usage or rate limit parks the issue for claude-requeue.yml. The marker is what
+          # requeue.py reads back, and one marker is posted per failed attempt. The label goes
+          # on first: if it cannot, fall through to the human hand-off rather than promise a
+          # retry that would never come.
+          if [ "$RETRY" = true ]; then
+            if gh api -X POST "repos/$REPO/issues/$ISSUE/labels" -f 'labels[]=agent:waiting-quota' --silent; then
+              marker="$(jq -cn --arg issue "$ISSUE" '{workflow: "claude-implement.yml", issue: $issue}')"
+              gh issue comment "$ISSUE" --repo "$REPO" --body "$(printf 'Claude hit a usage or rate limit; claude-requeue retries for up to 48 hours after the first failure (at most 48 attempts). Failed run: %s\n\n<!-- claude-requeue %s -->\n' "$RUN_URL" "$marker")"
+              exit 0
+            fi
+            echo "::warning::could not add agent:waiting-quota; handing the issue to a human instead"
+          fi
+          gh issue comment "$ISSUE" --repo "$REPO" --body "$(printf 'The Claude implement run failed before it opened a pull request: %s\n\nRemove and re-apply `agent:claude` to retry once the cause is fixed.\n\n<!-- claude-implement -->\n' "$RUN_URL")"
+          gh issue edit "$ISSUE" --repo "$REPO" --add-label needs-human \
+            || echo "::warning::could not add needs-human (create the label); the comment above is the signal"
