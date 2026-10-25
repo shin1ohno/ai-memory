@@ -38,6 +38,7 @@ jobs:
         memory-mcp/test_tags_and_ids.py
         memory-mcp/test_tag_preservation.py
         memory-keeper/test_merge_rules.py
+        auth-proxy/test_proxy.py
         hooks/test-mirror-file-memory.sh
       #
       # Minimum cases per suite, keyed by the suite's `=== RUN` line in `make test`.
