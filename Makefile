@@ -23,6 +23,8 @@ PROXY_STAMP := $(PROXY_VENV)/.requirements.stamp
 
 PY_SUITES = $(sort $(wildcard memory-mcp/test_*.py memory-keeper/test_*.py tests/test_*.py))
 SH_SUITES = $(sort $(wildcard tests/test_*.sh))
+# The proxy's suites need its own wheels, so they run under the proxy venv.
+PROXY_SUITES = $(sort $(wildcard auth-proxy/test_*.py))
 
 .PHONY: venv venv-proxy test test-affected check-distribution test-proxy-import test-mirror-hook test-http
 
@@ -42,16 +44,17 @@ $(PROXY_STAMP): requirements.txt
 
 # Each run is announced by an `=== RUN <suite>` line; ci.yml attributes the
 # `---- pass=N fail=F` summary that follows to that suite.
-test: $(VENV_STAMP)
+test: $(VENV_STAMP) $(PROXY_STAMP)
 	@n=0; \
 	for f in $(PY_SUITES); do echo "=== RUN $$f"; $(VENV_PY) $$f; n=$$((n+1)); done; \
 	if [ -f memory-mcp/test_client_policy.py ]; then \
 	  echo "=== RUN memory-mcp/test_client_policy.py --wiring"; \
 	  $(VENV_PY) memory-mcp/test_client_policy.py --wiring; n=$$((n+1)); \
 	fi; \
+	for f in $(PROXY_SUITES); do echo "=== RUN $$f"; $(PROXY_PY) $$f; n=$$((n+1)); done; \
 	for f in $(SH_SUITES); do echo "=== RUN $$f"; bash $$f; n=$$((n+1)); done; \
 	if [ $$n -eq 0 ]; then \
-	  echo "make test: no suites yet (memory-mcp/test_*.py, memory-keeper/test_*.py, tests/test_*.py, tests/test_*.sh)"; \
+	  echo "make test: no suites yet (memory-mcp/test_*.py, memory-keeper/test_*.py, tests/test_*.py, auth-proxy/test_*.py, tests/test_*.sh)"; \
 	else \
 	  echo "make test: $$n suite runs passed"; \
 	fi
