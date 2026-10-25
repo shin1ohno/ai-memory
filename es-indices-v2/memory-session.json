@@ -1,0 +1,134 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "codec": "best_compression",
+    "analysis": {
+      "analyzer": {
+        "ja_en_hybrid": {
+          "type": "custom",
+          "tokenizer": "kuromoji_tokenizer",
+          "filter": [
+            "kuromoji_baseform",
+            "kuromoji_part_of_speech",
+            "cjk_width",
+            "lowercase",
+            "kuromoji_stemmer"
+          ]
+        }
+      }
+    }
+  },
+  "mappings": {
+    "dynamic": "strict",
+    "_meta": {
+      "schema": "session/1"
+    },
+    "properties": {
+      "session_key": {
+        "type": "keyword"
+      },
+      "session_id": {
+        "type": "keyword"
+      },
+      "host": {
+        "type": "keyword"
+      },
+      "project_dir": {
+        "type": "keyword"
+      },
+      "jsonl_path": {
+        "type": "keyword",
+        "index": false
+      },
+      "cwd": {
+        "type": "keyword"
+      },
+      "cwd_candidates": {
+        "type": "keyword"
+      },
+      "resume_cwd": {
+        "type": "keyword"
+      },
+      "resume_cwd_verified": {
+        "type": "boolean"
+      },
+      "title": {
+        "type": "text",
+        "analyzer": "ja_en_hybrid",
+        "fields": {
+          "raw": {
+            "type": "keyword",
+            "ignore_above": 256
+          }
+        }
+      },
+      "title_source": {
+        "type": "keyword"
+      },
+      "git_branch": {
+        "type": "keyword"
+      },
+      "entrypoint": {
+        "type": "keyword"
+      },
+      "interactive": {
+        "type": "boolean"
+      },
+      "cc_version": {
+        "type": "keyword"
+      },
+      "started_at": {
+        "type": "date"
+      },
+      "updated_at": {
+        "type": "date"
+      },
+      "message_count": {
+        "type": "integer"
+      },
+      "text_message_count": {
+        "type": "integer"
+      },
+      "has_subagents": {
+        "type": "boolean"
+      },
+      "jsonl_exists": {
+        "type": "boolean"
+      },
+      "jsonl_checked_at": {
+        "type": "date"
+      },
+      "archived": {
+        "type": "boolean"
+      },
+      "archive_complete": {
+        "type": "boolean"
+      },
+      "archive_generation": {
+        "type": "integer"
+      },
+      "archive_bytes": {
+        "type": "long"
+      },
+      "archive_chunks": {
+        "type": "object",
+        "enabled": false
+      },
+      "restored_from": {
+        "type": "keyword"
+      },
+      "redact_version": {
+        "type": "keyword"
+      },
+      "parser_version": {
+        "type": "keyword"
+      },
+      "purged_at": {
+        "type": "date"
+      },
+      "purged_by": {
+        "type": "keyword"
+      }
+    }
+  }
+}

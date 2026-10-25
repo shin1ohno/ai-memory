@@ -1,0 +1,23 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 1
+  },
+  "mappings": {
+    "properties": {
+      "written_at":          {"type": "date"},
+      "host":                {"type": "keyword"},
+      "raw_backlog":         {"type": "integer"},
+      "reconciled_total":    {"type": "integer"},
+      "superseded_total":    {"type": "integer"},
+      "promoted_total":      {"type": "integer"},
+      "expired_deleted":     {"type": "integer"},
+      "stats_pruned":        {"type": "integer"},
+      "guard_violations":    {"type": "integer"},
+      "errors":              {"type": "integer"},
+      "loop_lag_ms":         {"type": "float"},
+      "reconciled_this_run": {"type": "integer"},
+      "run_kind":            {"type": "keyword"}
+    }
+  }
+}

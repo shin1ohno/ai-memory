@@ -1,0 +1,39 @@
+[Unit]
+Description=memory-keeper reconcile tick — adjudicate raw facts via claude -p (ADD/UPDATE/NOOP)
+Documentation=https://github.com/shin1ohno/setup cookbooks/lxc-es-memory
+After=network-online.target memory-mcp-v2.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+# ES + Voyage secrets shared with the v2 server. EnvironmentFile parses
+# KEY=VALUE literally (no shell) — metacharacter-safe. This is why the port
+# from the mini launchd wrapper (which did `set -a; . keeper.env`) is more
+# robust: the ES password contains '(' and would break a shell source.
+EnvironmentFile=/opt/es-memory/memory-v2.env
+# claude subscription token (CLAUDE_CODE_OAUTH_TOKEN) from `claude setup-token`
+# on THIS ct. Optional (leading '-'): absent before setup-token — the timer gate
+# keeps this unit idle until the file exists, so the '-' just avoids a hard
+# start failure if the file is removed later.
+EnvironmentFile=-/opt/es-memory/keeper-claude.env
+# Index names + keeper knobs (non-secret) live in the unit per the v2 contract,
+# mirroring memory-mcp-v2.service. PROMOTE_WINDOW/NEAR_DUP_LIMIT use code defaults.
+Environment=FACT_INDEX=memory-fact
+Environment=EPISODE_INDEX=memory-episode
+Environment=STATS_INDEX=memory-stats
+Environment=RECONCILE_MODEL=sonnet
+Environment=RECONCILE_BATCH=10
+Environment=KEEPER_HOST=es-memory
+# claude -p (subscription): HOME points at /root/.claude/.credentials.json written
+# by `claude setup-token`; PATH + CLAUDE_BIN locate the standalone claude binary.
+Environment=HOME=/root
+Environment=CLAUDE_BIN=/root/.local/bin/claude
+Environment=PATH=/root/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/python3 /opt/es-memory/keeper/reconcile.py
+# Up to RECONCILE_BATCH facts * 120s judge timeout; the flock in reconcile.py
+# prevents overlap, so a long tick just makes the next timer fire exit 0.
+TimeoutStartSec=1500
+
+[Install]
+WantedBy=multi-user.target
