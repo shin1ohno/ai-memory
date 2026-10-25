@@ -1,0 +1,231 @@
+# [D] CI dispatcher — routes an agent PR's CI result to the next blueprint node.
+#
+# Two jobs, one per CI outcome:
+#   fix     CI failed    -> the bounded CI-fix loop (nodes 7 -> 8)
+#   review  CI succeeded -> the AI review, once per PR (node 9)
+#
+# This is the piece the agent nodes cannot be: it increments round counters and decides
+# whether a round happens at all. The agent jobs' tokens are read-only by design, so a cap
+# would otherwise be a request rather than a bound.
+#
+#   CI fails on an agent PR
+#     -> resolve the PR from the head branch, and refuse anything that is not an agent PR
+#     -> bump ci_fix_rounds in the PR body, or stop at the cap
+#     -> at the cap: comment once, label needs-human, exit successfully
+#     -> under the cap: dispatch the engine's CI-fix workflow with the PR number and round:
+#        claude-fix-ci.yml (Claude subscription, also given the failed run's id) or
+#        agent-fix-ci-codex.lock.yml (gh-aw)
+#
+#   CI succeeds on an agent PR that has not been reviewed
+#     -> label ai-reviewed, dispatch claude-review.yml (the reviewer is always Claude)
+#
+# Why `workflow_run` on ONE named workflow rather than a rollup classification: the pilot
+# knows which workflow matters, so it does not need to separate required checks from
+# optional third-party statuses. That distinction is a trap if you reach for the obvious
+# tool — `gh pr checks --required` exits 0 with "no required checks reported on the
+# '<branch>' branch" when the repository has no required contexts configured, so exit 0
+# does not mean "required checks are green". `gh aw checks <pr>` does make the distinction
+# properly (states: success | failed | pending | no_checks | policy_blocked, with
+# `required_state` separated) and is the right upgrade if the pilot ever wants
+# whole-rollup semantics.
+#
+# Why `workflow_dispatch` for the hand-off: GitHub documents that events created with
+# GITHUB_TOKEN do not start new workflow runs, with workflow_dispatch and
+# repository_dispatch as the stated exceptions. A label or a body edit would not reach the
+# agent workflow.
+#
+# Enabling checklist:
+#   1. The workflow name below is ai-memory's CI workflow (`ai-memory-ci`, C10's ci.yml).
+#   2. Create the `needs-human` and `ai-reviewed` labels.
+#   3. Set W3_CI_FIX_ENABLED=true to arm the fix route, W3_AI_REVIEW_ENABLED=true to arm the
+#      review route. The two are independent. Each job checks its own variable first, so an
+#      unarmed route does nothing at all rather than dispatching into a refusing workflow.
+name: ci-dispatch
+
+on:
+  workflow_run:
+    workflows: ["ai-memory-ci"]
+    types: [completed]
+
+permissions: {}
+
+# The head repository is part of the group: a fork can name its branch like an agent
+# branch, and must not queue behind (or ahead of) the real one.
+concurrency:
+  group: ci-dispatch-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  fix:
+    # A fork's CI run never reaches the steps: the job-level check comes before any token.
+    if: >-
+      vars.W3_CI_FIX_ENABLED == 'true' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Resolve the pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+        run: |
+          set -euo pipefail
+          if [ "$HEAD_REPO" != "$REPO" ]; then
+            echo "fork PR: not dispatching an agent into it"
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          pr="$(gh pr list --repo "$REPO" --head "$HEAD_BRANCH" --state open \
+                  --json number,labels --jq '.[0] // empty' || true)"
+          if [ -z "$pr" ]; then
+            echo "no open PR for this branch"
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          number="$(printf '%s' "$pr" | jq -r '.number')"
+          labels="$(printf '%s' "$pr" | jq -r '[.labels[].name] | join(",")')"
+          printf 'PR #%s labels=%s\n' "$number" "$labels"
+          if ! printf '%s' "$labels" | tr ',' '\n' | grep -q '^agent:'; then
+            echo "not an agent PR"
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if printf '%s' "$labels" | tr ',' '\n' | grep -qx 'needs-human'; then
+            echo "already handed to a human"
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          {
+            printf 'skip=false\n'
+            printf 'number=%s\n' "$number"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Bump the round counter, or stop at the cap
+        id: bump
+        if: steps.pr.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ steps.pr.outputs.number }}
+        run: |
+          set -uo pipefail
+          gh api "repos/$REPO/pulls/$PR" --jq '.body // ""' > pr-body.md
+          engine="$(grep -oE '^[[:space:]]*engine[[:space:]]*:[[:space:]]*[a-z]+' pr-body.md | head -1 | cut -d: -f2 | tr -d ' ')"
+          case "$engine" in
+            claude|codex) ;;
+            *) echo "no usable engine in the envelope block (got: '${engine:-}')"; exit 1 ;;
+          esac
+          python3 spine-github/scripts/bump_rounds.py \
+            --body-file pr-body.md --counter ci_fix_rounds --out pr-body.new.md
+          rc=$?
+          {
+            printf 'engine=%s\n' "$engine"
+            printf 'rc=%s\n' "$rc"
+          } >> "$GITHUB_OUTPUT"
+          if [ "$rc" -eq 0 ]; then
+            round="$(grep -oE '^[[:space:]]*ci_fix_rounds[[:space:]]*:[[:space:]]*[0-9]+' pr-body.new.md | grep -oE '[0-9]+$')"
+            printf 'round=%s\n' "$round" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # 9 is the documented "cap reached" exit, and it is a normal outcome.
+          [ "$rc" -eq 9 ] && exit 0
+          exit "$rc"
+
+      - name: Hand the pull request to a human
+        if: steps.bump.outputs.rc == '9'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          gh pr edit "$PR" --repo "$REPO" --add-label needs-human
+          gh pr comment "$PR" --repo "$REPO" --body "$(printf 'CI is still failing and the agentic CI-fix round cap is reached, so this pull request is now a human task. The remaining failure is either outside the envelope or not something another round would fix.\n\n<!-- ci-dispatch -->\n')"
+
+      - name: Record the round and dispatch the agent
+        if: steps.bump.outputs.rc == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ steps.pr.outputs.number }}
+          ENGINE: ${{ steps.bump.outputs.engine }}
+          ROUND: ${{ steps.bump.outputs.round }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          # Record the increment BEFORE dispatching. If the dispatch then fails, the counter
+          # is one too high and the loop stops early — the safe direction to be wrong in.
+          gh pr edit "$PR" --repo "$REPO" --body-file pr-body.new.md
+          if [ "$ENGINE" = claude ]; then
+            printf 'dispatching claude-fix-ci for PR #%s round %s (failed run %s)\n' "$PR" "$ROUND" "$RUN_ID"
+            gh workflow run claude-fix-ci.yml --repo "$REPO" --ref "$DEFAULT_BRANCH" \
+              -f "pr=$PR" -f "round=$ROUND" -f "run_id=$RUN_ID"
+          else
+            printf 'dispatching agent-fix-ci-%s for PR #%s round %s\n' "$ENGINE" "$PR" "$ROUND"
+            gh workflow run "agent-fix-ci-$ENGINE.lock.yml" --repo "$REPO" --ref "$DEFAULT_BRANCH" \
+              -f "pr=$PR" -f "round=$ROUND"
+          fi
+
+  review:
+    if: >-
+      vars.W3_AI_REVIEW_ENABLED == 'true' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+      pull-requests: write
+    steps:
+      - name: Resolve the pull request and decide whether it is due a review
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+        run: |
+          set -euo pipefail
+          skip() { echo "$1"; echo "due=false" >> "$GITHUB_OUTPUT"; exit 0; }
+          [ "$HEAD_REPO" = "$REPO" ] || skip "fork PR: no agent review"
+          pr="$(gh pr list --repo "$REPO" --head "$HEAD_BRANCH" --state open \
+                  --json number,labels,body --jq '.[0] // empty' || true)"
+          [ -n "$pr" ] || skip "no open PR for this branch"
+          number="$(printf '%s' "$pr" | jq -r '.number')"
+          labels="$(printf '%s' "$pr" | jq -r '[.labels[].name] | join(",")')"
+          rounds="$(printf '%s' "$pr" | jq -r '.body // ""' \
+                    | grep -oE '^[[:space:]]*ai_review_rounds[[:space:]]*:[[:space:]]*[0-9]+' \
+                    | grep -oE '[0-9]+$' || echo 0)"
+          printf 'PR #%s labels=%s ai_review_rounds=%s\n' "$number" "$labels" "$rounds"
+          printf '%s' "$labels" | tr ',' '\n' | grep -q '^agent:' || skip "not an agent PR"
+          printf '%s' "$labels" | tr ',' '\n' | grep -qx 'needs-human' && skip "already handed to a human"
+          # One review per PR: the label is the idempotency key, so a later green CI run —
+          # including the one after the address round pushes its fixes — does not re-review.
+          printf '%s' "$labels" | tr ',' '\n' | grep -qx 'ai-reviewed' && skip "already reviewed"
+          [ "$rounds" -eq 0 ] || skip "an address round already ran"
+          {
+            echo "due=true"
+            echo "number=$number"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Mark the PR reviewed and dispatch the reviewer
+        if: steps.pr.outputs.due == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ steps.pr.outputs.number }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          # Label first: two CI workflows finishing close together must not both dispatch.
+          gh pr edit "$PR" --repo "$REPO" --add-label ai-reviewed
+          gh workflow run claude-review.yml --repo "$REPO" --ref "$DEFAULT_BRANCH" -f "pr=$PR"

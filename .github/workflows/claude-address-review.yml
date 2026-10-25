@@ -1,0 +1,447 @@
+# [A] address review (node 10), Claude engine, on a Claude subscription. Bounded at one round.
+#
+# Inert until the repository variable W3_AI_REVIEW_ENABLED is set to true. Only
+# claude-review.yml dispatches it, after it posted the review and route_review.py recorded
+# the round; it passes the PR number and the round. The implementing engine addresses its
+# own PR's review: Codex PRs go to agent-address-review-codex.lock.yml instead.
+#
+#   agent    read-only token. Exports the unresolved AI-review threads (review_threads.sh: the
+#            opening comment of each, never the replies), the task envelope and the PR diff,
+#            checks the PR head out under work/, and runs Claude Code inside awf with no
+#            GitHub access. The agent edits code and writes .agent-out/replies.json.
+#   verify   only when the agent changed something; no secret, no environment, read-only
+#            token. Applies the patch to the PR head and runs lint and the envelope's
+#            test_command, the only place the agent's code runs.
+#   publish  deterministic, and trusts nothing the agent job produced except the patch and
+#            replies.json: it re-reads the PR, its envelope and the open threads from GitHub.
+#            replies.json is validated first (agent_outputs.py: a reply may only go to a
+#            comment that opens one of those threads), then the patch is graded with
+#            grade_patch.sh from a copy of the default branch's spine-github, the replies and
+#            added lines pass tripwire.py, and the patch is pushed to the PR branch with the
+#            factory App's token (or GH_AW_CI_TRIGGER_TOKEN where no App is configured) so CI
+#            re-runs; only then are the replies posted and the threads the agent fixed
+#            resolved.
+#   handoff  when either job fails on a PR that passed validation: label needs-human. When
+#            the agent step itself failed on a usage or rate limit (classify_failure.py),
+#            label agent:waiting-quota instead and leave a claude-requeue marker, so that
+#            claude-requeue.yml dispatches this same round again later.
+name: claude-address-review
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "Pull request number whose AI review to address"
+        required: true
+      round:
+        description: "The address round this run is, as recorded by claude-review"
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: claude-address-review-${{ inputs.pr }}
+  cancel-in-progress: false
+
+jobs:
+  agent:
+    # Dispatch-driven: whoever holds Actions: write can dispatch this from any ref with any
+    # inputs. Refuse every ref but the default branch, so the scripts and prompts that run
+    # here are always the reviewed ones.
+    if: vars.W3_AI_REVIEW_ENABLED == 'true' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    # CLAUDE_CODE_OAUTH_TOKEN is an environment secret of agent-claude (deployable from main only).
+    environment: agent-claude
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    outputs:
+      head_sha: ${{ steps.pr.outputs.head_sha }}
+      threads: ${{ steps.threads.outputs.count }}
+      changed: ${{ steps.collect.outputs.changed }}
+      retry: ${{ steps.classify.outputs.retry }}
+    steps:
+      - name: Checkout the default branch (trusted scripts)
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: "[D] load the pull request and its envelope"
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr }}
+          ROUND: ${{ inputs.round }}
+          REQUIRE_CLAUDE_BRANCH: "1"
+          TRUSTED_ISSUE_AUTHOR_IDS: ${{ vars.TRUSTED_ISSUE_AUTHOR_IDS }}
+        run: |
+          set -euo pipefail
+          for v in "$PR" "$ROUND"; do
+            case "$v" in ''|*[!0-9]*) echo "::error::refusing non-numeric input '$v'"; exit 1 ;; esac
+          done
+          bash spine-github/scripts/pr_context.sh "$PR" "$RUNNER_TEMP/ctx" "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/pr.out"
+          cat "$RUNNER_TEMP/pr.out"
+          grep -qx 'engine=claude' "$RUNNER_TEMP/pr.out" || { echo "::error::PR #$PR was not implemented by claude"; exit 1; }
+          cat "$RUNNER_TEMP/pr.out" >> "$GITHUB_OUTPUT"
+
+      # Defence in depth: the router already enforced the cap, but a hand-run dispatch would
+      # otherwise bypass the only bound on address rounds.
+      - name: "[D] re-check the address-review round cap"
+        env:
+          ROUND: ${{ inputs.round }}
+        run: |
+          set -euo pipefail
+          recorded="$(grep -oE '^[[:space:]]*ai_review_rounds[[:space:]]*:[[:space:]]*[0-9]+' "$RUNNER_TEMP/ctx/pr-body.md" | grep -oE '[0-9]+$' || echo 0)"
+          printf 'recorded=%s claimed=%s cap=1\n' "$recorded" "$ROUND"
+          # claude-review records the round before dispatching, so a legitimate run claims
+          # exactly the recorded round, which is 1.
+          if [ "$ROUND" -ne 1 ] || [ "$recorded" -ne "$ROUND" ]; then
+            echo "::error::address-review round cap exceeded: this pull request belongs to a human now"; exit 1
+          fi
+
+      - name: "[D] export the unresolved AI-review threads"
+        id: threads
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr }}
+        run: |
+          set -euo pipefail
+          bash spine-github/scripts/review_threads.sh "$PR" "$RUNNER_TEMP/ctx/threads.json"
+          count="$(jq 'length' "$RUNNER_TEMP/ctx/threads.json")"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          [ "$count" -gt 0 ] || echo "::notice::no unresolved AI-review threads: nothing to address"
+
+      - name: Checkout the pull request head
+        if: steps.threads.outputs.count != '0'
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ steps.pr.outputs.head_sha }}
+          path: work
+          persist-credentials: false
+
+      - name: "[D] hand the context to the agent"
+        if: steps.threads.outputs.count != '0'
+        run: |
+          set -euo pipefail
+          mkdir -p work/.agent-out
+          cp "$RUNNER_TEMP"/ctx/{envelope.json,pr.diff,pr-body.md,threads.json} work/.agent-out/
+          test -f work/AGENTS.md || { echo "::error::AGENTS.md is missing; the agent has no index"; exit 1; }
+
+      - name: "[A] address the review (Claude Code on the subscription, inside awf)"
+        id: agent
+        if: steps.threads.outputs.count != '0'
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CLAUDE_PROMPT_FILE: ${{ github.workspace }}/spine-github/prompts/address-review.md
+          CLAUDE_ALLOWED_TOOLS: "Read,Edit,Write,Glob,Grep,Bash(git status),Bash(git diff:*),Bash(git log:*),Bash(ls:*),Bash(cat:*),Bash(make:*),Bash(python3:*)"
+          CLAUDE_MAX_TURNS: "20"
+          AGENT_TIMEOUT_MIN: "20"
+          AWF_ALLOW_DOMAINS: api.anthropic.com
+          AGENT_WORKDIR: ${{ github.workspace }}/work
+        run: bash spine-github/scripts/run_claude_sandboxed.sh
+
+      # Usage or rate limit (retry later) versus anything else (a human). The classifier is
+      # the default branch's copy; the agent worked under work/. It is the only reader of
+      # claude-result.json, which therefore never leaves this job.
+      - name: "[D] classify the agent failure"
+        id: classify
+        if: failure() && steps.agent.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          python3 spine-github/scripts/classify_failure.py \
+            --result work/.agent-out/claude-result.json --stderr work/.agent-out/claude-stderr.log \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: "[D] collect the patch"
+        id: collect
+        if: steps.threads.outputs.count != '0'
+        working-directory: work
+        run: |
+          set -euo pipefail
+          test -s .agent-out/replies.json || { echo "::error::the agent wrote no replies.json"; exit 1; }
+          git add -A -- . ':!.agent-out'
+          git diff --cached --no-renames --raw --no-abbrev > .agent-out/changed-files.txt
+          git diff --cached --binary > .agent-out/change.patch
+          if [ -s .agent-out/change.patch ]; then echo "changed=true" >> "$GITHUB_OUTPUT"; else echo "changed=false" >> "$GITHUB_OUTPUT"; fi
+          printf 'changed files: %s\n' "$(wc -l < .agent-out/changed-files.txt)"
+
+      - name: Upload the agent output
+        if: steps.threads.outputs.count != '0'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: agent-out
+          path: |
+            work/.agent-out/changed-files.txt
+            work/.agent-out/change.patch
+            work/.agent-out/replies.json
+          retention-days: 7
+
+  # The agent's code runs here: no secret, no environment, a read-only token and no
+  # credentials in .git/config. The envelope is re-read from GitHub with the default
+  # branch's scripts before the patch touches the tree.
+  verify:
+    needs: [agent]
+    if: needs.agent.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    steps:
+      - name: Checkout the default branch (trusted scripts)
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: "[D] re-read the pull request's envelope"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr }}
+          REQUIRE_CLAUDE_BRANCH: "1"
+          TRUSTED_ISSUE_AUTHOR_IDS: ${{ vars.TRUSTED_ISSUE_AUTHOR_IDS }}
+        run: |
+          set -euo pipefail
+          case "$PR" in ''|*[!0-9]*) echo "::error::refusing non-numeric PR input"; exit 1 ;; esac
+          bash spine-github/scripts/pr_context.sh "$PR" "$RUNNER_TEMP/ctx" "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/pr.out"
+
+      - name: Checkout the pull request head the agent read
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.agent.outputs.head_sha }}
+          path: work
+          persist-credentials: false
+
+      - name: Download the agent output
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: agent-out
+          path: ${{ runner.temp }}/agent-out
+
+      - name: "[D] apply the patch"
+        working-directory: work
+        env:
+          OUT: ${{ runner.temp }}/agent-out
+        run: git apply --index "$OUT/change.patch"
+
+      - name: "[D] lint"
+        working-directory: work
+        run: |
+          set -euo pipefail
+          if make -n lint >/dev/null 2>&1; then make lint; else echo "no lint target; skipping"; fi
+
+      - name: "[D] affected tests"
+        working-directory: work
+        run: |
+          set -euo pipefail
+          cmd="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["test_command"])' "$RUNNER_TEMP/ctx/envelope.json")"
+          printf 'running: %s\n' "$cmd"
+          sh -c "$cmd"
+
+  publish:
+    needs: [agent, verify]
+    # verify is skipped when the agent changed nothing; the replies are still posted then.
+    if: >-
+      always() && needs.agent.result == 'success' && needs.agent.outputs.threads != '0' &&
+      (needs.verify.result == 'success' || needs.verify.result == 'skipped')
+    runs-on: ubuntu-latest
+    # AGENT_APP_PRIVATE_KEY is an environment secret of agent-app (deployable from main only).
+    environment: agent-app
+    timeout-minutes: 10
+    permissions:
+      # contents: write is for resolveReviewThread only: with pull-requests: write alone the
+      # mutation returns FORBIDDEN "Resource not accessible by integration" (observed), and
+      # gh-aw's own safe-outputs job carries contents: write for the same operation. Pushes
+      # use the App token or GH_AW_CI_TRIGGER_TOKEN, and no step in this job runs code from
+      # the agent.
+      contents: write
+      issues: read
+      pull-requests: write
+    steps:
+      - name: Checkout the default branch (trusted scripts)
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Download the agent output
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: agent-out
+          path: ${{ runner.temp }}/agent-out
+
+      # Every check below runs from this copy, taken before the PR branch is checked out.
+      - name: "[D] re-read the pull request and validate the replies"
+        id: fresh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr }}
+          READ_SHA: ${{ needs.agent.outputs.head_sha }}
+          OUT: ${{ runner.temp }}/agent-out
+          REQUIRE_CLAUDE_BRANCH: "1"
+          TRUSTED_ISSUE_AUTHOR_IDS: ${{ vars.TRUSTED_ISSUE_AUTHOR_IDS }}
+        run: |
+          set -euo pipefail
+          cp -R spine-github "$RUNNER_TEMP/trusted"
+          case "$PR" in ''|*[!0-9]*) echo "::error::refusing non-numeric PR input"; exit 1 ;; esac
+          bash "$RUNNER_TEMP/trusted/scripts/pr_context.sh" "$PR" "$RUNNER_TEMP/ctx" "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/pr.out"
+          grep -qx "head_sha=$READ_SHA" "$RUNNER_TEMP/pr.out" || {
+            echo "::error::the PR moved since the agent read it at $READ_SHA; refusing to publish against a new head"; exit 1; }
+          bash "$RUNNER_TEMP/trusted/scripts/review_threads.sh" "$PR" "$RUNNER_TEMP/ctx/threads.json"
+          python3 "$RUNNER_TEMP/trusted/scripts/agent_outputs.py" replies \
+            --in "$OUT/replies.json" --threads "$RUNNER_TEMP/ctx/threads.json" --out "$RUNNER_TEMP/replies.json"
+          grep '^head_ref=' "$RUNNER_TEMP/pr.out" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout the pull request head the agent read
+        if: needs.agent.outputs.changed == 'true'
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.agent.outputs.head_sha }}
+          path: work
+          persist-credentials: false
+
+      # No token in this step's environment. Graded from the patch itself on a throwaway
+      # index over the PR head, not from the file list the agent job reported.
+      - name: "[D] refuse the patch unless it stays in bounds"
+        if: needs.agent.outputs.changed == 'true'
+        working-directory: work
+        env:
+          OUT: ${{ runner.temp }}/agent-out
+          # The protected list comes from the default branch the PR targets, checked out at
+          # the workspace root, not from the PR head under work/.
+          PROTECTED_BASE_DIR: ${{ github.workspace }}
+          AGENT_PROTECTED_REQUIRED: ${{ vars.AGENT_PROTECTED_REQUIRED }}
+        run: |
+          set -euo pipefail
+          bash "$RUNNER_TEMP/trusted/scripts/grade_patch.sh" \
+            "$OUT/change.patch" "$RUNNER_TEMP/ctx/envelope.json" "$RUNNER_TEMP/graded.raw"
+
+      # A detector, not a defence: the replies and the added lines must not look like a
+      # credential. A hit fails the job, and handoff gives the PR to a human.
+      - name: "[D] refuse text that looks like a credential"
+        env:
+          OUT: ${{ runner.temp }}/agent-out
+        run: |
+          set -euo pipefail
+          jq -r '.[].body' "$RUNNER_TEMP/replies.json" > "$RUNNER_TEMP/reply-bodies.txt"
+          if [ -s "$OUT/change.patch" ]; then
+            python3 "$RUNNER_TEMP/trusted/scripts/tripwire.py" --patch "$OUT/change.patch" "$RUNNER_TEMP/reply-bodies.txt"
+          else
+            python3 "$RUNNER_TEMP/trusted/scripts/tripwire.py" "$RUNNER_TEMP/reply-bodies.txt"
+          fi
+
+      - name: "[D] mint the factory App token (this repository, one permission)"
+        id: app
+        if: needs.agent.outputs.changed == 'true' && vars.AGENT_APP_CLIENT_ID != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.AGENT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
+      - name: "[D] push the fixes to the pull request branch"
+        if: needs.agent.outputs.changed == 'true'
+        working-directory: work
+        env:
+          APP_CLIENT_ID: ${{ vars.AGENT_APP_CLIENT_ID }}
+          APP_SLUG: ${{ vars.AGENT_APP_SLUG }}
+          APP_BOT_ID: ${{ vars.AGENT_APP_BOT_ID }}
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+          PAT: ${{ secrets.GH_AW_CI_TRIGGER_TOKEN }}
+          OUT: ${{ runner.temp }}/agent-out
+          HEAD_REF: ${{ steps.fresh.outputs.head_ref }}
+        run: |
+          set -euo pipefail
+          # The App when one is configured (a failed mint has already failed this job), else
+          # the PAT, else stop: a fix pushed with GITHUB_TOKEN would never be re-tested.
+          if [ -n "$APP_CLIENT_ID" ]; then
+            token="$APP_TOKEN"
+            git config user.name "$APP_SLUG[bot]"
+            git config user.email "$APP_BOT_ID+$APP_SLUG[bot]@users.noreply.github.com"
+            echo "pushing as the factory App ($APP_SLUG[bot])"
+          elif [ -n "$PAT" ]; then
+            token="$PAT"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            echo "pushing with GH_AW_CI_TRIGGER_TOKEN (no App configured)"
+          else
+            echo "::error::neither AGENT_APP_CLIENT_ID nor GH_AW_CI_TRIGGER_TOKEN is set; a fix pushed with GITHUB_TOKEN would never be re-tested"
+            exit 1
+          fi
+          [ -n "$token" ] || { echo "::error::the App token is empty"; exit 1; }
+          git apply --index "$OUT/change.patch"
+          # Modes, OIDs and statuses too, in the very format grade_patch.sh graded.
+          git diff --cached --no-renames --raw --no-abbrev -z HEAD > "$RUNNER_TEMP/applied.raw"
+          if ! cmp -s "$RUNNER_TEMP/applied.raw" "$RUNNER_TEMP/graded.raw"; then
+            echo "::error::the applied patch differs from the graded one"
+            diff <(tr '\0' '\n' < "$RUNNER_TEMP/graded.raw") <(tr '\0' '\n' < "$RUNNER_TEMP/applied.raw") || true
+            exit 1
+          fi
+          git commit -q -m "agent(claude): address the AI review"
+          # Not a force push: if someone pushed to the branch after the re-read above, this
+          # is rejected rather than silently undoing their change.
+          auth="$(printf 'x-access-token:%s' "$token" | base64 -w0)"
+          echo "::add-mask::$auth"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" push -q origin "HEAD:refs/heads/$HEAD_REF"
+          echo "pushed $(git rev-parse HEAD) to $HEAD_REF"
+
+      - name: "[D] post the replies and resolve the fixed threads"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r row <&3; do
+            cid="$(jq -r '.comment_id' <<<"$row")"
+            body="$(jq -r '.body' <<<"$row")"
+            thread="$(jq -r '.resolve_thread // empty' <<<"$row")"
+            gh api -X POST "repos/$REPO/pulls/$PR/comments/$cid/replies" -f body="$body" --jq '"replied to " + (.in_reply_to_id|tostring)'
+            if [ -n "$thread" ]; then
+              gh api graphql -f id="$thread" -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' \
+                --jq '"resolved: " + (.data.resolveReviewThread.thread.isResolved|tostring)'
+            fi
+          done 3< <(jq -c '.[]' "$RUNNER_TEMP/replies.json")
+
+  handoff:
+    needs: [agent, verify, publish]
+    if: failure() && needs.agent.outputs.head_sha != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Park the pull request for a retry, or hand it to a human
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr }}
+          ROUND: ${{ inputs.round }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RETRY: ${{ needs.agent.outputs.retry }}
+        run: |
+          set -euo pipefail
+          # A usage or rate limit parks the PR for claude-requeue.yml, which dispatches this
+          # same round again: claude-review already recorded it, and the cap check accepts
+          # round 1 with ai_review_rounds 1. One marker per failed attempt. The label goes on
+          # first: if it cannot, fall through to the human hand-off rather than promise a retry.
+          if [ "$RETRY" = true ]; then
+            if gh api -X POST "repos/$REPO/issues/$PR/labels" -f 'labels[]=agent:waiting-quota' --silent; then
+              marker="$(jq -cn --arg pr "$PR" --arg round "$ROUND" \
+                '{workflow: "claude-address-review.yml", inputs: {pr: $pr, round: $round}}')"
+              gh pr comment "$PR" --repo "$REPO" --body "$(printf 'Claude hit a usage or rate limit; claude-requeue retries for up to 48 hours after the first failure (at most 48 attempts). Failed run: %s\n\n<!-- claude-requeue %s -->\n' "$RUN_URL" "$marker")"
+              exit 0
+            fi
+            echo "::warning::could not add agent:waiting-quota; handing the pull request to a human instead"
+          fi
+          gh pr edit "$PR" --repo "$REPO" --add-label needs-human
+          gh pr comment "$PR" --repo "$REPO" --body "$(printf 'The agentic address-review round failed before it finished (%s), so the open review threads are for a human now.\n\n<!-- claude-address-review -->\n' "$RUN_URL")"
