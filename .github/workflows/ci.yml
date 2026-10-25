@@ -45,7 +45,7 @@ jobs:
         {
         "memory-mcp/test_tags_and_ids.py": {"pass": 17},
         "memory-mcp/test_tag_preservation.py": {"pass": 45},
-        "memory-mcp/test_client_policy.py": {"pass": 111, "max_skip": 1},
+        "memory-mcp/test_client_policy.py": {"pass": 116, "max_skip": 1},
         "memory-keeper/test_merge_rules.py": {"pass": 29}
         }
     steps:
