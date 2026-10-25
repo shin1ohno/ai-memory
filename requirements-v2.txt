@@ -1,0 +1,29 @@
+# memory-mcp v2 server venv (contract §S1). All deps ship manylinux wheels —
+# no build toolchain required. Deliberately NO aiohttp / PyJWT / opentelemetry
+# (those live in the proxy venv), NO openai, NO voyageai SDK (voyage.py speaks
+# raw httpx).
+
+# MCP server. Floor pinned for streamable_http_app() + Context + ToolAnnotations.
+#
+# CEILING IS LOAD-BEARING. mcp 2.0.0 REMOVED `mcp.server.fastmcp` -- the 2.x tree
+# has `mcp.server.mcpserver` instead -- so server.py's very first import dies with
+# `ModuleNotFoundError: No module named 'mcp.server.fastmcp'`. A floor-only
+# requirement let 2.0.0 in the moment it was published: measured on a fresh venv
+# (2026-08-03), where `mcp>=1.12` resolved to 2.0.0 and the unit crash-looped with
+# ExecMainStatus=1. Pinning below 2 resolves to 1.29.0 and `import server` succeeds.
+#
+# This replaces the Phase-0 TODO that used to sit here asking someone to confirm the
+# resolved wheel actually has `mcp.server.fastmcp.Context`, `mcp.types.ToolAnnotations`
+# and `FastMCP.streamable_http_app()`. It did not, once 2.x shipped. Porting to the
+# 2.x API is a separate piece of work; raising this ceiling without doing that port
+# breaks the server.
+mcp>=1.12,<2
+
+starlette>=0.37.0
+uvicorn>=0.30.0
+httpx>=0.27.0
+
+# Session archive compression (sessions_archive.py, design spec §6.5). Server
+# venv only. Imported lazily, so a venv without it still serves /memory/mcp and
+# answers archive writes 503 instead of failing to start.
+zstandard>=0.22

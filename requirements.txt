@@ -1,0 +1,20 @@
+# Base requirements for the SHARED /opt/es-memory venv. requirements-v2.txt
+# deliberately omits aiohttp / PyJWT / opentelemetry, so the auth proxy
+# (memory-v2-proxy) runs on the wheels installed from THIS file — do not trim
+# it to what the retired v1 server needed.
+# All deps ship manylinux wheels — no build toolchain required.
+
+# MCP server runtime (shared by memory-mcp-v2)
+mcp>=1.2.0
+starlette>=0.37.0
+uvicorn>=0.30.0
+httpx>=0.27.0
+
+# Auth proxy (OIDC-JWT + OpenTelemetry, reused verbatim from lxc-memory)
+aiohttp>=3.9,<4
+PyJWT[crypto]>=2.8,<3
+opentelemetry-api>=1.28
+opentelemetry-sdk>=1.28
+opentelemetry-exporter-otlp-proto-grpc>=1.28
+opentelemetry-instrumentation-aiohttp-server>=0.49b0
+opentelemetry-instrumentation-aiohttp-client>=0.49b0
