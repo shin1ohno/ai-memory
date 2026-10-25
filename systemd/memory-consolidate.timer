@@ -1,0 +1,13 @@
+[Unit]
+Description=Nightly memory-keeper consolidation at 03:30 local
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+# Run once at next boot if the machine was off at 03:30 (episode expiry must not
+# be skipped indefinitely). RunAtLoad was false on the mini launchd equivalent,
+# but Persistent=true only catches genuinely missed fires, not load-time.
+Persistent=true
+Unit=memory-consolidate.service
+
+[Install]
+WantedBy=timers.target

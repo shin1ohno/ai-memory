@@ -1,0 +1,57 @@
+[Unit]
+Description=memory-mcp v2 unified memory MCP server (Voyage embeddings on ElasticSearch)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/es-memory/app-v2
+# ES_URL / ES_USER / ES_PASSWORD / ES_VERIFY_CERTS / VOYAGE_API_KEY /
+# VOYAGE_ENDPOINT / EMBEDDING_MODEL / EMBEDDING_DIMENSIONS. EnvironmentFile is
+# metacharacter-safe (no shell source) — preferred over docker-compose env_file
+# for SSM-sourced secrets (~/.claude/docs/pve-lxc-detail.md).
+EnvironmentFile=/opt/es-memory/memory-v2.env
+# PROXY_SHARED_SECRET (X-Proxy-Secret). The SAME root-only file is the proxy
+# unit's EnvironmentFile, so server and proxy can never disagree. Optional
+# ('-'): before the cookbook generates it, neither side has a secret — the MCP
+# namespace keeps working and the sessions gate refuses every request.
+EnvironmentFile=-/opt/es-memory/proxy-secret.env
+# Index names live in the unit (not the .env) per the v2 contract §2a.
+Environment=FACT_INDEX=memory-fact
+Environment=KNOWLEDGE_INDEX=memory-knowledge
+Environment=EPISODE_INDEX=memory-episode
+Environment=STATS_INDEX=memory-stats
+Environment=ALL_ALIAS=memory-all
+# Per-client tool policy for client_credentials callers (identity.py
+# CLIENT_POLICY; format client=tool,tool@dataset|dataset, `;`-separated).
+# authorization_code (claude.ai) is not subject to it. An unlisted client, a
+# malformed value or an unknown tool name denies every client_credentials call —
+# so a client added to the proxy's ALLOWED_CLIENT_IDS needs an entry here too.
+# Only ingest and forget may be granted (the dataset-scoped tools). Removing
+# this line switches the gate OFF (`AUDIT policy_unset`) — the shape deployments
+# predating the policy run in — so test_client_policy.py pins it.
+# memory-keeper writes ES directly and monitoring-prober only lists tools, so
+# both are known with no tools. memory-mirror is the file-memory mirror hook.
+# session-search-<host> (session search ccs clients) get no MCP tools: their
+# /memory/sessions/v1 scopes come from SESSION_SCOPE_POLICY in memory-v2.env.
+# Startup logs one `POLICY <client> -> ...` line per entry, or
+# `AUDIT policy_invalid`.
+Environment="CLIENT_POLICY=memory-keeper=;monitoring-prober=;memory-mirror=ingest,forget@file-memory;session-search-pro-dev=;session-search-mini=;session-search-neo="
+# Shares the v1 venv (/opt/es-memory/venv) with requirements-v2.txt installed
+# into it; WorkingDirectory=app-v2 makes `server:app` resolve to app-v2/server.py.
+# --no-access-log: uvicorn's access line carries the full request target, query
+# string included, and /memory/sessions/v1/preview?q=... would put search terms
+# in the journal (design spec §7.2 / §8 row 22). The proxy in front already
+# logs method, path (aiohttp request.path has no query) and status per request.
+ExecStart=/opt/es-memory/venv/bin/uvicorn server:app --host 127.0.0.1 --port 8010 --workers 1 --no-access-log
+Restart=on-failure
+RestartSec=5
+# Namespace hardening (NoNewPrivileges/ProtectSystem/ProtectHome/PrivateTmp)
+# intentionally omitted: they fail with status=226/NAMESPACE inside privileged
+# PVE LXCs (see node-exporter.service + ~/.claude/docs/pve-lxc-detail.md). The MCP
+# server listens only on 127.0.0.1 behind the auth proxy.
+
+[Install]
+WantedBy=multi-user.target

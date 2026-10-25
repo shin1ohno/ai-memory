@@ -1,0 +1,47 @@
+[Unit]
+Description=memory-mcp v2 OIDC-JWT auth proxy (memory-v2 namespace)
+After=memory-mcp-v2.service network-online.target
+Wants=memory-mcp-v2.service network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/es-memory/app-v2
+Environment=OIDC_ISSUER=https://mcp.ohno.be
+Environment=OIDC_JWKS_URL=https://mcp.ohno.be/.well-known/jwks.json
+# UPSTREAM_URL includes the /memory prefix: mcp.ohno.be nginx strips the location
+# prefix (trailing-slash proxy_pass) so this proxy receives /mcp; proxy.py forwards
+# UPSTREAM_URL + path_qs, re-mapping to the v2 server's /memory/mcp mount on :8010.
+Environment=UPSTREAM_URL=http://127.0.0.1:8010/memory
+Environment=PORT=8767
+# PATH_PREFIX only sets the advertised RESOURCE_ID (OIDC_ISSUER + PATH_PREFIX) at
+# .well-known/oauth-protected-resource — NOT routing. At cutover this proxy serves
+# the production /memory/ route (nginx memory_upstream_servers -> :8767), so it must
+# advertise https://mcp.ohno.be/memory (already in MEMORY_AUDIENCES), not /memory-v2.
+Environment=PATH_PREFIX=/memory
+# v2 identity enforcement (contract §2b/§3). When MEMORY_AUDIENCES is set the
+# proxy enforces the grant matrix (client_credentials vs authorization_code) and
+# injects X-Verified-{Sub,Client-Id,Grant}. Empty would leave the block inert
+# (the shared proxy.py serves the v1 memory namespace unaffected).
+Environment=MEMORY_AUDIENCES=https://mcp.ohno.be/memory,memory
+# authorization_code sub = the Google login email the consent app writes as the
+# Hydra subject (userinfo.email), gated by SSM /hydra/allowed-emails — NOT the
+# Anthropic-account (Apple relay) address. A mismatch here 403s every claude.ai
+# request once /memory/ is served by this proxy (enforcement is inert on v1).
+Environment=ALLOWED_SUBS=shin1ohno@gmail.com,sh1@mercari.com
+# Which client_credentials clients may reach the server at all; what each may do
+# there is memory-mcp-v2.service's CLIENT_POLICY, which must list the same ids.
+# session-search-<host>: the per-host ccs clients (bin/register-session-search);
+# their sessions scopes are SESSION_SCOPE_POLICY's, not CLIENT_POLICY's.
+Environment=ALLOWED_CLIENT_IDS=memory-keeper,monitoring-prober,memory-mirror,session-search-pro-dev,session-search-mini,session-search-neo
+# PROXY_SHARED_SECRET, sent upstream as X-Proxy-Secret on every proxied request.
+# Same file as memory-mcp-v2.service's, so the two always agree ('-': absent on
+# both sides before the cookbook first generates it).
+EnvironmentFile=-/opt/es-memory/proxy-secret.env
+ExecStart=/opt/es-memory/venv/bin/python proxy.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

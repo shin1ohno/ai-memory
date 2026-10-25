@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# bin/register-memory-mirror — one-time operator setup for the file-memory
+# mirror's OAuth2 client_credentials client in Hydra.
+#
+# The mirror hook (cookbooks/claude-code/files/hooks/mirror-file-memory.rb) on
+# personal hosts authenticates to the memory MCP as the `memory-mirror` client.
+# Its client_id/secret are minted once here and stored in SSM, from where
+# cookbooks/memory-mirror writes them to ~/.config/memory-mirror/client.env.
+# This is the memory-mirror analogue of bin/register-memory-keeper, with two
+# differences:
+#   - the client is as narrow as Hydra allows: grant client_credentials only,
+#     audience ["memory"] only, no redirect_uris, no scope. What it may DO is
+#     decided server-side by CLIENT_POLICY in memory-mcp-v2.service
+#     (ingest/forget in dataset file-memory).
+#   - the secret never appears in a process argv on any hop: the Hydra
+#     registration payload travels over ssh stdin into curl `-d @-`, and the
+#     SSM write reads the value from stdin (--value file:///dev/stdin).
+#
+# Why this lives in bin/ rather than the cookbook: the consuming hosts' IAM
+# principals (pve-bootstrap-ssm on pro-dev, operator profiles on Macs) only
+# read /memory/*; originating a credential needs ssm:PutParameter, which only
+# the operator's admin profile has.
+#
+# Usage:
+#   bin/register-memory-mirror
+#
+# Environment overrides:
+#   PVE_HOST     default 192.168.1.10
+#   HYDRA_CTID   default 106
+#   AWS_PROFILE  default sh1admn
+#   AWS_REGION   default ap-northeast-1
+#
+# Idempotent:
+#   - Already registered: the secret is NOT rotated (Hydra cannot return it).
+#     The registered metadata is verified, then the SSM parameters are checked;
+#     exits 0 when both are in place.
+#   - Registered but SSM incomplete: fails loudly with the recovery command
+#     (delete the client, re-run).
+#
+# Prerequisites: ssh root@PVE_HOST, jq, aws CLI with PutParameter on /memory/*.
+
+set -euo pipefail
+
+PVE_HOST="${PVE_HOST:-192.168.1.10}"
+HYDRA_CTID="${HYDRA_CTID:-106}"
+AWS_PROFILE="${AWS_PROFILE:-sh1admn}"
+AWS_REGION="${AWS_REGION:-ap-northeast-1}"
+
+CLIENT_ID="memory-mirror"
+SSM_ID_PARAM="/memory/mirror-client-id"
+SSM_SECRET_PARAM="/memory/mirror-client-secret"
+HYDRA_ADMIN="http://127.0.0.1:4445"
+
+log() { printf '[register-memory-mirror] %s\n' "$*" >&2; }
+fail() { log "ERROR: $*"; exit 1; }
+
+command -v jq >/dev/null 2>&1 || fail "jq is required"
+command -v aws >/dev/null 2>&1 || fail "aws CLI is required"
+
+hydra() { # hydra <command...> — run inside the Hydra CT, stdin closed
+  ssh -n root@"$PVE_HOST" "pct exec $HYDRA_CTID -- $*"
+}
+
+# Checks the registered client against the contract and prints nothing from
+# the response (Hydra does not return the secret, but the check does not need
+# to show anything either).
+verify_metadata() {
+  local meta
+  meta=$(hydra curl -fsS "$HYDRA_ADMIN/admin/clients/$CLIENT_ID") ||
+    fail "could not read $CLIENT_ID back from the Hydra admin API"
+  if ! jq -e '
+      .client_id == "memory-mirror"
+      and .grant_types == ["client_credentials"]
+      and ((.redirect_uris // []) | length) == 0
+      and .audience == ["memory"]
+      and .token_endpoint_auth_method == "client_secret_basic"
+    ' >/dev/null <<<"$meta"; then
+    log "registered metadata does not match the contract:"
+    jq '{client_id, grant_types, redirect_uris, audience, token_endpoint_auth_method}' <<<"$meta" >&2
+    fail "fix or delete the client: ssh root@$PVE_HOST pct exec $HYDRA_CTID -- curl -fsS -X DELETE $HYDRA_ADMIN/admin/clients/$CLIENT_ID"
+  fi
+  log "Hydra metadata OK: client_credentials, audience [memory], no redirect_uris, client_secret_basic."
+}
+
+ssm_complete() {
+  local ssm_id ssm_secret_present
+  ssm_id=$(aws ssm get-parameter --name "$SSM_ID_PARAM" --query Parameter.Value --output text \
+    --profile "$AWS_PROFILE" --region "$AWS_REGION" 2>/dev/null || true)
+  ssm_secret_present=$(aws ssm describe-parameters --parameter-filters "Key=Name,Values=$SSM_SECRET_PARAM" \
+    --query 'Parameters[].Name' --output text --profile "$AWS_PROFILE" --region "$AWS_REGION" 2>/dev/null || true)
+  [[ "$ssm_id" == "$CLIENT_ID" && -n "$ssm_secret_present" ]]
+}
+
+# 1. Preflight: the admin profile must work BEFORE a secret is minted, or the
+#    registration would succeed with nowhere to store the only copy.
+log "checking AWS profile $AWS_PROFILE..."
+aws sts get-caller-identity --profile "$AWS_PROFILE" --region "$AWS_REGION" >/dev/null ||
+  fail "AWS profile $AWS_PROFILE is not usable (aws login / aws configure first)."
+
+log "checking Hydra admin API on CT $HYDRA_CTID..."
+hydra curl -fsS "$HYDRA_ADMIN/health/ready" >/dev/null 2>&1 ||
+  fail "Hydra admin API at $HYDRA_ADMIN/health/ready (inside CT $HYDRA_CTID) is not ready."
+log "Hydra admin API ready."
+
+# 2. Re-run path.
+if hydra curl -fsS "$HYDRA_ADMIN/admin/clients/$CLIENT_ID" 2>/dev/null | grep -q '"client_id"'; then
+  log "$CLIENT_ID already registered in Hydra."
+  verify_metadata
+  if ssm_complete; then
+    log "SSM parameters already present. Nothing to do."
+    exit 0
+  fi
+  fail "Client registered in Hydra but SSM is missing $SSM_ID_PARAM / $SSM_SECRET_PARAM. The original client_secret is unrecoverable from Hydra. Recovery: ssh root@$PVE_HOST pct exec $HYDRA_CTID -- curl -fsS -X DELETE $HYDRA_ADMIN/admin/clients/$CLIENT_ID  then re-run this script."
+fi
+
+# 3. Fresh secret: 48 alphanumerics. The charset check also makes it safe to
+#    embed in the JSON payloads below without escaping.
+SECRET=$(openssl rand -base64 64 | tr -d '/+=\n' | head -c 48)
+[[ "$SECRET" =~ ^[A-Za-z0-9]{48}$ ]] || fail "openssl produced an unexpected secret shape (${#SECRET} chars)"
+
+# 4. Register. printf is a bash builtin, so the payload (and the secret in it)
+#    reaches ssh's stdin without appearing in any argv; pct exec forwards stdin
+#    to curl, which reads the body with -d @-.
+log "registering $CLIENT_ID (client_credentials, audience [memory])..."
+printf '{"client_id":"%s","client_name":"Memory Mirror","client_secret":"%s","grant_types":["client_credentials"],"response_types":[],"audience":["memory"],"token_endpoint_auth_method":"client_secret_basic"}' \
+  "$CLIENT_ID" "$SECRET" |
+  ssh root@"$PVE_HOST" "pct exec $HYDRA_CTID -- curl -fsS -X POST $HYDRA_ADMIN/admin/clients -H 'Content-Type: application/json' -d @-" \
+    >/dev/null || fail "Hydra admin API rejected the registration."
+
+# 5. Verify what Hydra stored.
+verify_metadata
+
+# 6. Store in SSM. The secret reaches aws on stdin through the CLI's per-parameter
+#    file:// loader (`--value file:///dev/stdin`), never as a literal --value
+#    (which would put it in aws's argv). Not --cli-input-json file:///dev/stdin:
+#    aws-cli 2.34 rejects that with "Invalid JSON received" (observed
+#    2026-09-27), while the per-parameter loader reads stdin as expected.
+log "writing $SSM_ID_PARAM (String) and $SSM_SECRET_PARAM (SecureString) to SSM..."
+store_failed() {
+  fail "SSM write failed after registration; the secret is lost. Recovery: ssh root@$PVE_HOST pct exec $HYDRA_CTID -- curl -fsS -X DELETE $HYDRA_ADMIN/admin/clients/$CLIENT_ID  then re-run this script."
+}
+aws ssm put-parameter --name "$SSM_ID_PARAM" --type String --value "$CLIENT_ID" --overwrite \
+  --profile "$AWS_PROFILE" --region "$AWS_REGION" >/dev/null || store_failed
+printf '%s' "$SECRET" |
+  aws ssm put-parameter --name "$SSM_SECRET_PARAM" --type SecureString --overwrite \
+    --value file:///dev/stdin \
+    --profile "$AWS_PROFILE" --region "$AWS_REGION" >/dev/null || store_failed
+unset SECRET
+
+ssm_complete || store_failed
+
+log "done. $CLIENT_ID is registered and its credentials are in SSM ($SSM_ID_PARAM / $SSM_SECRET_PARAM)."
+log "Next: CLIENT_POLICY on memory-mcp-v2 must list memory-mirror, then cookbooks/memory-mirror"
+log "places ~/.config/memory-mirror/client.env on pro-dev / mini / neo; check with"
+log "  env -i HOME=\"\$HOME\" ~/.claude/hooks/ruby-shim ~/.claude/hooks/mirror-file-memory.rb --check"
