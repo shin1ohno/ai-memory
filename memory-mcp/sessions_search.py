@@ -68,13 +68,13 @@ SINCE_RE = re.compile(
 
 # Fields returned for each session in /search (§7.2) — and the _mget _source.
 SEARCH_FIELDS = ["session_key", "session_id", "host", "title", "cwd", "resume_cwd",
-                 "updated_at", "jsonl_exists", "archived", "archive_complete", "interactive"]
+                 "updated_at", "jsonl_exists", "archived", "archive_complete", "interactive", "entrypoint"]
 # /preview returns more of the session doc: ccs resume reads session_id, host,
 # project_dir, jsonl_path, resume_cwd, archived, archive_complete from it.
 # archive_chunks (internal sha256 bookkeeping) is never returned.
 PREVIEW_FIELDS = SEARCH_FIELDS + [
     "project_dir", "jsonl_path", "resume_cwd_verified", "cwd_candidates", "title_source",
-    "git_branch", "entrypoint", "cc_version", "started_at", "message_count",
+    "git_branch", "cc_version", "started_at", "message_count",
     "text_message_count", "has_subagents", "jsonl_checked_at", "archive_generation",
     "archive_bytes", "restored_from", "redact_version", "parser_version"]
 _MGET_SOURCE = SEARCH_FIELDS + ["purged_at"]
