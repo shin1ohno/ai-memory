@@ -16,7 +16,9 @@ import hashlib
 import json
 import re
 
-PARSER_VERSION = "p1"
+import session_codex
+
+PARSER_VERSION = "p2"
 
 INDEXED_TYPES = frozenset({"user", "assistant"})
 # Record types that are known and deliberately not indexed as messages. Anything
@@ -40,7 +42,7 @@ TOOL_INPUT_CAP = 2048
 TOOL_RESULT_HEAD = 1536
 TOOL_RESULT_TAIL = 512
 TITLE_MAX = 120
-INTERACTIVE_ENTRYPOINTS = frozenset({"cli", "claude-desktop"})
+INTERACTIVE_ENTRYPOINTS = frozenset({"cli", "claude-desktop"}) | session_codex.INTERACTIVE
 
 # Title source priority, highest first (§6.1).
 TITLE_PRIORITY = {"custom-title": 4, "ai-title": 3, "summary": 2, "first-user": 1}
@@ -151,7 +153,8 @@ def new_counters() -> dict:
 
 def parse_lines(session_key: str, kind: str, lines: list, start_offset: int, *,
                 host: str, session_id: str, agent_id: str | None = None,
-                known_entrypoint: str | None = None, redact_version: str = "") -> dict:
+                known_entrypoint: str | None = None, redact_version: str = "",
+                known_cwd: str | None = None, source: str = "claude", codex_state=None) -> dict:
     """Parse one segment.
 
     `lines` are the masked JSON lines of the segment, in file order.
@@ -172,6 +175,9 @@ def parse_lines(session_key: str, kind: str, lines: list, start_offset: int, *,
         "titles": {}, "message_count": 0, "text_message_count": 0, "tombstones": 0,
     }
     entrypoint = known_entrypoint
+    codex_cwd = known_cwd
+    codex_stream = source == "codex" or session_codex.is_codex(entrypoint)
+    codex_index = session_codex.IndexState(session_id, codex_state)
     for idx, line in enumerate(lines):
         try:
             rec = json.loads(line) if isinstance(line, str) else None
@@ -180,6 +186,13 @@ def parse_lines(session_key: str, kind: str, lines: list, start_offset: int, *,
         if not isinstance(rec, dict):
             counters["invalid_lines"] += 1
             continue
+        codex_stream = codex_stream or rec.get("type") == "session_meta"
+        if codex_stream:
+            if not codex_index.accept(rec):
+                continue
+            rec = session_codex.normalize(rec, position=start_offset + idx,
+                                          entrypoint=entrypoint or "codex-unknown", cwd=codex_cwd)
+            codex_cwd = rec.get("cwd") or codex_cwd
         rtype = rec.get("type")
         ts = rec.get("timestamp") if isinstance(rec.get("timestamp"), str) else None
         if ts:
@@ -262,14 +275,15 @@ def parse_lines(session_key: str, kind: str, lines: list, start_offset: int, *,
         }
         docs.append(doc)
     delta["entrypoint_effective"] = entrypoint
-    return {"docs": docs, "delta": delta, "counters": counters}
+    return {"docs": docs, "delta": delta, "counters": counters,
+            "codex_state": codex_index.state if codex_stream else None}
 
 
 def choose_resume_cwd(cwd_candidates: list, project_dir: str) -> tuple[str | None, bool]:
     """The candidate (first cwd, then each relocatedCwd in order) whose encoding
     equals the JSONL's parent directory name; else the first cwd, unverified."""
     for c in cwd_candidates:
-        if isinstance(c, str) and encode_cwd(c) == project_dir:
+        if isinstance(c, str) and project_dir in (encode_cwd(c), "codex-" + encode_cwd(c)):
             return c, True
     first = cwd_candidates[0] if cwd_candidates else None
     return first, False

@@ -1013,6 +1013,9 @@ async def ingest(request: Request, caller: dict):
     session_id = _str(f.get("session_id"), "file.session_id", SESSION_ID_RE)
     project_dir = _str(f.get("project_dir"), "file.project_dir", PROJECT_DIR_RE)
     jsonl_path = _str(f.get("jsonl_path"), "file.jsonl_path")
+    source = f.get("source", "claude")
+    if source not in ("claude", "codex") or (source == "codex" and not project_dir.startswith("codex-")):
+        raise HTTPError(400, "invalid_request", field="file.source")
     kind = f.get("kind")
     if kind not in ("main", "subagent"):
         raise HTTPError(400, "invalid_request", field="file.kind")
@@ -1096,10 +1099,13 @@ async def ingest(request: Request, caller: dict):
                 raise HTTPError(409, "offset_mismatch", expected_offset=next_expected)
 
         async with _segment_slot(caller):
+            previous = [c for c in seg_chunks if c["offset"] < offset]
             parsed = await _run_bounded(
                 sessions_parse.parse_lines, session_key, kind, canonical, offset, host=host,
                 session_id=session_id, agent_id=agent_id,
-                known_entrypoint=(existing or {}).get("entrypoint"), redact_version=version)
+                known_entrypoint=(existing or {}).get("entrypoint"), redact_version=version,
+                known_cwd=(existing or {}).get("cwd"), source=source,
+                codex_state=previous[-1].get("codex_state") if previous else None)
         for k, n in parsed["counters"]["unknown_types"].items():
             _COUNTERS["unknown_types"][k] = _COUNTERS["unknown_types"].get(k, 0) + n
 
@@ -1156,6 +1162,8 @@ async def ingest(request: Request, caller: dict):
             "messages": delta["message_count"], "text_messages": delta["text_message_count"],
             "tombstones": delta["tombstones"],
         }
+        if parsed.get("codex_state") is not None:
+            entry["codex_state"] = parsed["codex_state"]
         if agent_id is not None:
             entry["agent_id"] = agent_id
         seg_chunks.append(entry)
@@ -1457,6 +1465,7 @@ async def status(request: Request, caller: dict):
     out = {"schema": {"session": SCHEMA_SESSION, "message": SCHEMA_MESSAGE},
            "redact_version": session_redact.RULESET_VERSION,
            "parser_version": sessions_parse.PARSER_VERSION,
+           "sources": ["claude", "codex"],
            "ready": _STATE["ready"], "docs": None, "sessions": None,
            "pending_embeddings": None, "last_retention_run": None,
            "caller_host": caller.get("host"),
