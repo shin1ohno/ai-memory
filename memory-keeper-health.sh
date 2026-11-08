@@ -65,6 +65,24 @@ if [[ -n "${ES_PASSWORD:-}" ]]; then
   [[ -n "${ts}" ]] && stats_age=$(( now - ts / 1000 ))
 fi
 
+# ExecMainStatus is meaningful only after the service has started.
+reconcile_exit="-1"
+if service_state=$(systemctl show memory-keeper-reconcile.service \
+    -p ExecMainStatus -p ExecMainStartTimestampMonotonic 2>/dev/null); then
+  service_status=""
+  service_started=""
+  while IFS='=' read -r property value; do
+    case "$property" in
+      ExecMainStatus) service_status="$value" ;;
+      ExecMainStartTimestampMonotonic) service_started="$value" ;;
+    esac
+  done <<< "$service_state"
+  if [[ "$service_status" =~ ^[0-9]+$ && "$service_started" =~ ^[0-9]+$ ]] &&
+      [[ "$service_started" != 0 ]]; then
+    reconcile_exit="$service_status"
+  fi
+fi
+
 mkdir -p "${TEXTFILE_DIR}"
 tmp=$(mktemp "${OUT}.XXXXXX")
 trap 'rm -f "${tmp}"' EXIT
@@ -75,6 +93,9 @@ trap 'rm -f "${tmp}"' EXIT
   echo "# HELP memory_keeper_stats_age_seconds Seconds since the latest memory-stats self-report (-1 = unknown/never)"
   echo "# TYPE memory_keeper_stats_age_seconds gauge"
   echo "memory_keeper_stats_age_seconds ${stats_age}"
+  echo "# HELP memory_keeper_reconcile_last_exit_code Last reconcile exit status (-1 = unknown/never)"
+  echo "# TYPE memory_keeper_reconcile_last_exit_code gauge"
+  echo "memory_keeper_reconcile_last_exit_code ${reconcile_exit}"
   echo "# HELP memory_keeper_health_scrape_timestamp_seconds Unix time of last keeper health probe"
   echo "# TYPE memory_keeper_health_scrape_timestamp_seconds gauge"
   echo "memory_keeper_health_scrape_timestamp_seconds ${now}"

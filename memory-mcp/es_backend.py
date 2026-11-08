@@ -303,7 +303,7 @@ async def _bulk_index(index: str, docs: list[dict]) -> int:
 
 # --------------------------------------------------------------------------- #
 # Index definitions (contract §1). Built in-process so the server is
-# self-bootstrapping; mirrors files/es-indices-v2/*.json — keep in sync.
+# self-bootstrapping; mirrors es-indices-v2/*.json — keep in sync.
 # --------------------------------------------------------------------------- #
 _ANALYSIS = {
     "analyzer": {
@@ -387,6 +387,7 @@ _INDEX_DEFS: dict[str, dict] = {
             "superseded_total": {"type": "integer"},
             "promoted_total": {"type": "integer"},
             "expired_deleted": {"type": "integer"},
+            "stats_pruned": {"type": "integer"},
             "guard_violations": {"type": "integer"},
             "errors": {"type": "integer"},
             "loop_lag_ms": {"type": "float"},
