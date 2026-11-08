@@ -9,6 +9,7 @@ scoring.py
 identity.py
 policy_mcp.py
 session_redact.py
+session_codex.py
 sessions_parse.py
 sessions_sigv4.py
 sessions_archive.py
