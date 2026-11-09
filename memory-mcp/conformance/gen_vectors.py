@@ -258,6 +258,17 @@ def redactor_inputs(sr):
         for i, (left, right) in enumerate(pairs):
             for op in ("redact_text", "detect_text"):
                 yield "boundary/%s/%04d/%s" % (name, i, op), op, left + sample + right, KEY, {}
+        # Preserve all earlier transformations that really changed the sample.
+        # Only the previous no-op substitutions are excluded from the count.
+        for i, (before, after) in enumerate((("Authorization", "authorızatıon"), ("Authorization", "authorİzation"),
+                                            ("PASSWORD", "PAſſWORD"), ("secret", "ſecret"), ("key", "Key"), ("key", "Key"))):
+            changed = sample.replace(before, after)
+            if changed != sample:
+                yield "case/%s/%d" % (name, i), "redact_text", changed, KEY, {}
+        for i, whitespace in enumerate(("\x1c", "\x1d", "\x1e", "\x1f", "\x85")):
+            changed = sample.replace(" ", whitespace)
+            if changed != sample:
+                yield "space/%s/%d" % (name, i), "redact_text", changed, KEY, {}
     yield from adversarial_inputs(sr)
     for n in (sr.MAX_VALUE_CHARS - 1, sr.MAX_VALUE_CHARS, sr.MAX_VALUE_CHARS + 1):
         for op in ("redact_text", "detect_text"):
