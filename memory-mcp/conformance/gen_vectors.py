@@ -5,10 +5,8 @@ Run with the server's Python/Unicode version. --client-tree supplies the real
 ccs Shipper for line expectations (session-search 527735d or later).
 The committed vectors are data; --check replays them without regenerating them.
 
-The Rust loop must iterate to a fixed point with the real _MAX_PASSES = 8
-limit. One-pass truncation is detected. A two-pass mutant remains unresolved:
-no three-pass witness has yet been found; passing this finite corpus does not
-prove that shortening the limit is equivalent or authorize that change.
+The pass limit is 8. The result after the last pass is returned even when it
+is not a fixed point. Rust must reproduce that return value exactly.
 """
 from __future__ import annotations
 
@@ -251,6 +249,46 @@ def adversarial_inputs(sr):
             yield "fixed-point/%d/%s" % (i, op), op, text, KEY, {}
 
 
+def pass_limit_inputs():
+    for stages in range(1, 11):
+        value = "=${".join('password="client_secret": ""client_secret": " v%02daaaaaaaasecret"' % i
+                           for i in range(stages))
+        for op in ("redact_text", "detect_text"):
+            yield "pass-limit/%02d/%s" % (stages, op), op, value, KEY, {}
+
+
+def rule_boundary_inputs():
+    for segment in (2, 3):
+        for n in (7, 8, 9):
+            parts = ["eyJ" + "a" * 8, "b" * 8, "c" * 8]
+            parts[segment - 1] = ("b" if segment == 2 else "c") * n
+            for op in ("redact_text", "detect_text"):
+                yield "limit/jwt/%d/%d/%s" % (segment, n, op), op, ".".join(parts), KEY, {}
+    for n in (39, 40, 41):
+        text = "-----BEGIN " + "A" * n + "PRIVATE KEY-----payload-----END PRIVATE KEY-----"
+        for op in ("redact_text", "detect_text"):
+            yield "limit/private-key/%d/%s" % (n, op), op, text, KEY, {}
+        name = "secret" + "x" * n
+        for op in ("redact_text", "detect_text"):
+            yield "limit/cfg-suffix/%d/%s" % (n, op), op, name + "=abcdefghij", KEY, {}
+        for op in ("redact_record", "detect_record"):
+            yield "limit/cfg-key-suffix/%d/%s" % (n, op), op, {name: "abcdefghij"}, KEY, {}
+    for char in (" ", "\t"):
+        for n in (15, 16, 17):
+            for side in (0, 1):
+                before, after = (char * n, " ") if side == 0 else ("", char * n)
+                text = "Authorization" + before + ":" + after + "Bearer\t" + "h" * 16
+                value = '"secret"' + before + ':' + after + '"a bcdefgh"'
+                for op in ("redact_text", "detect_text"):
+                    yield "limit/bearer-separator/%d/%d/%d/%s" % (ord(char), n, side, op), op, text, KEY, {}
+                    yield "limit/cfg-json-separator/%d/%d/%d/%s" % (ord(char), n, side, op), op, value, KEY, {}
+    for i, value in enumerate(("  ${DUMMY_VALUE}  ", " \t<template-value> ", "  xxx-dummy", "  ***dummy")):
+        for op in ("redact_record", "detect_record"):
+            yield "limit/placeholder-strip/%d/%s" % (i, op), op, {"secret": value}, KEY, {}
+        for op in ("redact_text", "detect_text"):
+            yield "limit/placeholder-json/%d/%s" % (i, op), op, dumps({"secret": value}), KEY, {}
+
+
 def redactor_inputs(sr):
     for name, sample in SAMPLES.items():
         pairs = ((a, b) for a in BOUNDARIES for b in BOUNDARIES) if name in CROSS else (
@@ -270,6 +308,8 @@ def redactor_inputs(sr):
             if changed != sample:
                 yield "space/%s/%d" % (name, i), "redact_text", changed, KEY, {}
     yield from adversarial_inputs(sr)
+    yield from pass_limit_inputs()
+    yield from rule_boundary_inputs()
     for n in (sr.MAX_VALUE_CHARS - 1, sr.MAX_VALUE_CHARS, sr.MAX_VALUE_CHARS + 1):
         for op in ("redact_text", "detect_text"):
             yield "value-cap/%d/%s" % (n, op), op, "x" * n, KEY, {}
@@ -339,15 +379,35 @@ def line_result(oracle, sr, value, key=KEY):
     return {"route": route, "output": sent[0] if sent else None, "counts": counts, "offsets": offsets}
 
 
-def strict_oracle():
-    # Read the real server parser without importing its web/storage services.
-    tree = ast.parse((SERVER / "sessions_app.py").read_text())
-    names = {"_BadLine", "_no_duplicate_keys", "_reject_constant", "strict_load"}
-    nodes = [n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and n.name in names]
-    ns = {"json": json, "re": re, "MAX_RECORD_DEPTH": 64, "_SURROGATE_RE": re.compile(r"[\ud800-\udfff]")}
-    # The constant is extracted too, so mutations of the actual source apply.
-    nodes[:0] = [n for n in tree.body if isinstance(n, ast.Assign) and any(
-        isinstance(t, ast.Name) and t.id == "MAX_RECORD_DEPTH" for t in n.targets)]
+def parser_contract(source=None):
+    """Select only the real strict_load implementation and its dependencies.
+
+    Unrelated routes, storage code, comments and line shifts outside these
+    symbols cannot change this fingerprint. A dependency edit invalidates it;
+    replay also compares actual strict_load outcomes on every raw-line vector.
+    """
+    source = source if source is not None else (SERVER / "sessions_app.py").read_text()
+    tree = ast.parse(source)
+    functions = {"_BadLine", "_no_duplicate_keys", "_reject_constant", "strict_load"}
+    constants = {"MAX_RECORD_DEPTH", "_SURROGATE_RE"}
+    nodes, selected, names = [], [], set()
+    for n in tree.body:
+        name = n.name if isinstance(n, (ast.FunctionDef, ast.ClassDef)) else None
+        if isinstance(n, ast.Assign):
+            name = next((t.id for t in n.targets if isinstance(t, ast.Name) and t.id in constants), None)
+        if name in functions | constants:
+            nodes.append(n)
+            selected.append(ast.get_source_segment(source, n))
+            names.add(name)
+    if names != functions | constants:
+        raise ValueError("strict_load dependency selection is incomplete")
+    digest = hashlib.sha256("\n".join(selected).encode()).hexdigest()
+    return nodes, digest
+
+
+def strict_oracle(source=None):
+    nodes, _ = parser_contract(source)
+    ns = {"json": json, "re": re}
     exec(compile(ast.Module(body=nodes, type_ignores=[]), "<sessions_app.py parser>", "exec"), ns)
     return types.SimpleNamespace(**ns)
 
@@ -425,6 +485,17 @@ def line_vectors(client, sr):
             lines.append(('{"k":' * (depth - 1) + leaf + '}' * (depth - 1)).encode())
             lines.append(('[' * (depth - 1) + leaf + ']' * (depth - 1)).encode())
     lines.append(('{"x":' + '[' * 128 + '0' + ']' * 128 + ',"x":0}').encode())
+    for n in (999, 1000, 1001, 4299, 4300, 4301):
+        for sign in (b"", b"-"):
+            lines.append(b'{"n":' + sign + b'1' * n + b'}')
+    lines.extend([b'{"\\ud800":"plain"}', b'{"\\udc00":"plain"}',
+                  b'{"\\ud83d\\ude00":"plain"}', b'{"password=abcdefghij\\ud800":"plain"}'])
+    for surrogate, deep, integer in ((True, True, False), (True, False, True),
+                                    (False, True, True), (True, True, True)):
+        leaf = '"\\ud800"' if surrogate else '"plain"'
+        nested = '{"k":' * 64 + leaf + '}' * 64 if deep else leaf
+        number = '1' * 4301 if integer else '0'
+        lines.append(('{"x":' + nested + ',"n":' + number + '}').encode())
     old_log = ingest.util.log
     ingest.util.log = lambda *args: None
     try:
@@ -525,8 +596,8 @@ def check(path, kind, client=None):
             raise ValueError("client_source_blob mismatch (frozen source)")
         if client and header["client_source_blob"] != blob(client / "ccs/ingest.py"):
             raise ValueError("client_source_blob mismatch (live source)")
-        if header["server_parser_source_blob"] != blob(SERVER / "sessions_app.py"):
-            raise ValueError("server_parser_source_blob mismatch")
+        if header["server_parser_sha256"] != parser_contract()[1]:
+            raise ValueError("server_parser_sha256 mismatch")
         LINE_ORACLE = line_oracle(header["client_source"])
         server = strict_oracle()
     lines = body.splitlines()
@@ -626,7 +697,7 @@ def main():
                  SERVER / "session_redact.py", vectors, 8000,
                  {"client_source_blob": blob(args.client_tree / "ccs/ingest.py"),
                   "client_source": (args.client_tree / "ccs/ingest.py").read_text(),
-                  "server_parser_source_blob": blob(SERVER / "sessions_app.py")})
+                  "server_parser_sha256": parser_contract()[1]})
     write_corpus(HERE / "session_codex_v1.jsonl", "ccs-codex-conformance/1", "v1",
                  SERVER / "session_codex.py", codex_vectors(sc), 100)
     return 0
