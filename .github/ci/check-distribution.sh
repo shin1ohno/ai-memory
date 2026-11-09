@@ -50,7 +50,7 @@ for unit in memory-mcp memory-keeper; do
   #    data, templates, nested modules, symlinks — FAILS: the cookbook does
   #    not deploy it and this unit's shape does not allow it (review F3).
   while IFS= read -r f; do
-    case "$f" in MANIFEST|test_*.py) continue ;; esac
+    case "$f" in MANIFEST|test_*.py|conformance/session_redact_r*.jsonl|conformance/session_codex_v*.jsonl|conformance/gen_vectors.py) continue ;; esac
     grep -qxF "$f" "$dir/MANIFEST" || { echo "FAIL  $unit: $f exists but is not in MANIFEST (would not be deployed)"; fail=1; }
   done < <(cd "$dir" && find . -mindepth 1 -name __pycache__ -prune -o \( -type f -o -type l \) -print | sed 's#^\./##' | sort)
   # 2. every listed file exists AND has a shape the cookbook can deploy: a
