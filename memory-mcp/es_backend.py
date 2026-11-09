@@ -436,8 +436,7 @@ async def _alias_covers(client: httpx.AsyncClient, members: list[str]) -> bool:
 async def ensure_indices(retries: int = 10, delay: float = 3.0) -> None:
     """Make sure the 4 indices and the memory-all alias exist, and tolerate not
     being allowed to create them. Retries because ES may be cold at boot. Uses an
-    ephemeral client so the module-level `_es` pool is not created inside the
-    throwaway loop used by the import-time asyncio.run() call.
+    ephemeral client so startup retries do not retain a broken connection pool.
 
     LEAST-PRIVILEGE CREDENTIALS. This server is deployable with an ES user that
     holds only read / write / view_index_metadata on the memory-* indices -- no

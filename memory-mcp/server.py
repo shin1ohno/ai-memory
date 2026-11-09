@@ -76,7 +76,9 @@ except Exception:  # pragma: no cover
         pass
 
 
-mcp = PolicyFastMCP("memory")
+mcp = PolicyFastMCP(
+    "memory", session_idle_timeout=float(os.environ.get("MCP_SESSION_IDLE_TIMEOUT", "1800")),
+)
 
 
 
