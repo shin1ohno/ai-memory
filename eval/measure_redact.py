@@ -90,7 +90,7 @@ def measure(paths, days=30, segment_bytes=SEGMENT_BYTES, now=None):
                             try:
                                 record = json.loads(text)
                                 operation = redact_record
-                            except ValueError:
+                            except (ValueError, RecursionError):
                                 record, operation = text, redact_text
                             started = time.perf_counter()
                             _, counts = operation(record, key)

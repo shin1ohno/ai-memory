@@ -63,6 +63,17 @@ class Measurement(unittest.TestCase):
         self.assertNotIn('PRIVATE', run.stdout + run.stderr)
         self.assertEqual(run.stderr, '')
 
+    def test_deep_json_does_not_discard_remaining_lines_or_segment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'input.jsonl'
+            data = b'{}\n' * 6 + b'[' * 60000 + b'\n' + b'{}\n' * 4
+            path.write_bytes(data)
+            result = measure.measure([path])
+            self.assertEqual(result['errors'], 0)
+            self.assertEqual(result['records'], 11)
+            self.assertEqual(result['bytes'], len(data))
+            self.assertEqual(result['segments'], 1)
+
     def test_quantiles_use_nearest_rank(self):
         self.assertEqual(measure.percentile([4, 1, 2, 3], .5), 2)
         self.assertEqual(measure.percentile([4, 1, 2, 3], .95), 4)
