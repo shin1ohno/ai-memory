@@ -79,8 +79,7 @@ __all__ = [
 ]
 
 # Module-level async client — bound to uvicorn's event loop on first use.
-# ensure_indices() (called at import via asyncio.run) uses a SEPARATE ephemeral
-# client so this pool is never created inside a throwaway loop.
+# ensure_indices() uses a separate ephemeral client for startup retries.
 _es = httpx.AsyncClient(
     base_url=ES_URL,
     auth=(ES_USER, ES_PASSWORD),
@@ -437,8 +436,7 @@ async def _alias_covers(client: httpx.AsyncClient, members: list[str]) -> bool:
 async def ensure_indices(retries: int = 10, delay: float = 3.0) -> None:
     """Make sure the 4 indices and the memory-all alias exist, and tolerate not
     being allowed to create them. Retries because ES may be cold at boot. Uses an
-    ephemeral client so the module-level `_es` pool is not created inside the
-    throwaway loop used by the import-time asyncio.run() call.
+    ephemeral client so startup retries do not retain a broken connection pool.
 
     LEAST-PRIVILEGE CREDENTIALS. This server is deployable with an ES user that
     holds only read / write / view_index_metadata on the memory-* indices -- no
@@ -503,19 +501,29 @@ async def recall(query: str, memory_type: str | None = None, top_k: int = 10,
     if not include_auto:
         flt.append({"bool": {"must_not": {"term": {"provenance.source_class": "auto-capture"}}}})
 
-    degraded: str | None = None
-    qvec: list[float] | None = None
-    try:
-        qvec = await voyage.embed_query(query)
-    except voyage.VoyageUnavailable:
-        degraded = "bm25-only"
+    async def embedding():
+        try:
+            return await voyage.embed_query(query)
+        except voyage.VoyageUnavailable:
+            return None
 
-    # BM25 leg
     bm25_body = {
         "size": fetch,
         "query": {"bool": {"must": {"match": {"content": query}}, "filter": flt}},
     }
-    bm25_hits = (await _es_json("POST", f"/{index}/_search", bm25_body))["hits"]["hits"]
+    # Cancel and drain the other leg on failure or disconnect, so no work
+    # outlives the request. Only embedding unavailability degrades to BM25.
+    embed_task = asyncio.create_task(embedding())
+    bm25_task = asyncio.create_task(_es_json("POST", f"/{index}/_search", bm25_body))
+    try:
+        qvec, bm25_result = await asyncio.gather(embed_task, bm25_task)
+    finally:
+        for task in (embed_task, bm25_task):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(embed_task, bm25_task, return_exceptions=True)
+    degraded = "bm25-only" if qvec is None else None
+    bm25_hits = bm25_result["hits"]["hits"]
     legs = [bm25_hits]
 
     # kNN leg (skip when Voyage is down)

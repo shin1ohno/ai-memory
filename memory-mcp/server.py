@@ -76,13 +76,10 @@ except Exception:  # pragma: no cover
         pass
 
 
-mcp = PolicyFastMCP("memory")
+mcp = PolicyFastMCP(
+    "memory", session_idle_timeout=float(os.environ.get("MCP_SESSION_IDLE_TIMEOUT", "1800")),
+)
 
-# Self-bootstrap the 4 ES indices + memory-all alias before serving. Runs in a
-# throwaway loop with an ephemeral client (es_backend.ensure_indices) so the
-# module-level async ES client stays bound to uvicorn's loop. Retries 10×3s on
-# cold ES; propagates on final failure so systemd restarts the unit.
-asyncio.run(be.ensure_indices())
 
 
 def _ann(**kw):
@@ -325,6 +322,9 @@ if hasattr(mcp, "check_client_policy"):
 # ("session manager not initialized"). Run it from the parent lifespan.
 @asynccontextmanager
 async def lifespan(_app):
+    # Bootstrap before accepting requests; importing the app must need no ES.
+    # A final failure propagates so systemd can retry a cold backend.
+    await be.ensure_indices()
     # Session indices are ensured in a background task (sessions_app retries
     # until they exist with the expected _meta.schema), so a missing grant on
     # the session indices never delays or breaks the memory MCP server.
