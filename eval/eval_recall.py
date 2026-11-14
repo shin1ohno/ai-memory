@@ -14,9 +14,13 @@ Eval knobs:
     GOLDEN_SET    (default: golden_set.jsonl next to this file)
     EVAL_TOP_K    (default: 10) — top_k passed to recall
     EVAL_CUTOFFS  (default: "1,3,5,10") — recall@k report cutoffs
+    EVAL_NO_BUMP  (default: off) — set to 1 to pass bump_use=False, so the run
+                  changes no use_count / last_used_at
+    EVAL_INDEX_RECORDS (default: demote) — recall's index_records mode
 
-Note: recall bumps use_count on its top-3 hits as a fire-and-forget side
-effect — run against STAGING, not a frozen production snapshot.
+Note: unless EVAL_NO_BUMP=1, recall bumps use_count on its top-3 hits as a
+fire-and-forget side effect — run against STAGING, not a frozen production
+snapshot.
 """
 
 from __future__ import annotations
@@ -29,6 +33,8 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 GOLDEN = os.environ.get("GOLDEN_SET", os.path.join(HERE, "golden_set.jsonl"))
 EVAL_TOP_K = int(os.environ.get("EVAL_TOP_K", "10"))
+NO_BUMP = os.environ.get("EVAL_NO_BUMP", "") not in ("", "0")
+INDEX_RECORDS = os.environ.get("EVAL_INDEX_RECORDS", "demote")
 CUTOFFS = [int(x) for x in os.environ.get("EVAL_CUTOFFS", "1,3,5,10").split(",") if x.strip()]
 
 # es_backend v2 lives in the sibling memory-mcp dir (contract §9).
@@ -90,7 +96,9 @@ async def run() -> int:
         phrases = row.get("expect_contains", []) or []
         total_phrases += len(phrases)
 
-        hits = _hit_list(await be.recall(query, memory_type=mtype, top_k=fetch_k))
+        hits = _hit_list(await be.recall(query, memory_type=mtype, top_k=fetch_k,
+                                         index_records=INDEX_RECORDS,
+                                         bump_use=not NO_BUMP))
 
         for k in CUTOFFS:
             m = matched_at_k(hits, phrases, k)

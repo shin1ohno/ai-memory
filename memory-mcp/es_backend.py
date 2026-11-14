@@ -489,12 +489,49 @@ async def _ensure_alias(client: httpx.AsyncClient) -> None:
 # --------------------------------------------------------------------------- #
 # recall (contract §4)
 # --------------------------------------------------------------------------- #
+# An "index-like" record is a long note an agent keeps appending to (a project
+# log mirrored from a file-memory note). It matches many unrelated queries, and
+# being returned raises its use_count and refreshes last_used_at, which raise its
+# next score. Judged from stored fields only; nothing is written to the record.
+INDEX_DATASETS = ("file-memory",)
+INDEX_MIN_CHUNKS = 5
+INDEX_RECORDS_MODES = ("demote", "include", "exclude")
+
+
+async def _live_chunk_counts(parent_ids: list[str]) -> dict[str, int]:
+    """parent_id -> number of live (not superseded) chunks, in one query."""
+    body = {
+        "size": 0,
+        "query": {"bool": {
+            "filter": [{"terms": {"parent_id": parent_ids}}],
+            "must_not": [{"exists": {"field": "superseded_by"}}],
+        }},
+        "aggs": {"by_parent": {"terms": {"field": "parent_id",
+                                         "size": len(parent_ids)}}},
+    }
+    res = await _es_json("POST", f"/{KNOWLEDGE_INDEX}/_search", body)
+    buckets = res["aggregations"]["by_parent"]["buckets"]
+    return {b["key"]: b["doc_count"] for b in buckets}
+
+
 async def recall(query: str, memory_type: str | None = None, top_k: int = 10,
-                 filters: dict | None = None, include_auto: bool = True) -> dict:
+                 filters: dict | None = None, include_auto: bool = True,
+                 index_records: str = "demote", bump_use: bool = True) -> dict:
     """Hybrid BM25 + kNN retrieval with client-side RRF and multiplicative
     composite scoring. Excludes superseded docs. Returns an envelope
     {"hits": [...], "degraded"?}. Hits use the `memory_type` key (server remaps
-    to `type` for the tool schema)."""
+    to `type` for the tool schema).
+
+    Every document yields at most one hit (its best chunk). `index_records`
+    decides what happens to index-like records (INDEX_DATASETS knowledge
+    documents with INDEX_MIN_CHUNKS or more live chunks): "demote" (default)
+    scores them without use_count or last_used_at and times INDEX_FACTOR and
+    never bumps them; "include" scores them like any other record; "exclude"
+    drops them. `bump_use=False` skips the use_count bump of the top hits (an
+    evaluation replay must not change the ranking it measures)."""
+    if index_records not in INDEX_RECORDS_MODES:
+        raise QueryError(f"index_records must be one of {list(INDEX_RECORDS_MODES)}, "
+                         f"got {index_records!r}")
     fetch = max(50, 5 * top_k)
     index = _index_for(memory_type)
 
@@ -539,31 +576,68 @@ async def recall(query: str, memory_type: str | None = None, top_k: int = 10,
         for h in leg:
             sources.setdefault(h["_id"], h.get("_source", {}))
 
+    # Which candidates are index-like. The count query is sent only when some
+    # candidate could be (a file-memory knowledge chunk); a failure is reported,
+    # not papered over with the old scoring.
+    index_like: set[str] = set()
+    parents = sorted({s["parent_id"] for s in sources.values()
+                      if s.get("dataset") in INDEX_DATASETS and s.get("parent_id")})
+    if parents:
+        try:
+            counts = await _live_chunk_counts(parents)
+            big = {p for p, n in counts.items() if n >= INDEX_MIN_CHUNKS}
+            index_like = {i for i, s in sources.items()
+                          if s.get("dataset") in INDEX_DATASETS
+                          and s.get("parent_id") in big}
+        except Exception:  # noqa: BLE001 — judged below as "index-check-skipped"
+            degraded = "bm25-only+index-check-skipped" if degraded else "index-check-skipped"
+
     now = datetime.now(timezone.utc)
-    scored: list[tuple[str, float, dict]] = []
+    best: dict[str, tuple[str, float, dict]] = {}
     for _id, base in rrf.items():
         src = sources.get(_id, {})
+        like = _id in index_like
+        if like and index_records == "exclude":
+            continue
         mt = src.get("memory_type") or memory_type
-        scored.append((_id, scoring.composite(base, src, now, mt), src))
-    scored.sort(key=lambda t: t[1], reverse=True)
+        if like and index_records == "demote":
+            comp = scoring.composite(base, src, now, mt, index_like=True)
+        else:
+            comp = scoring.composite(base, src, now, mt)
+        key = src.get("parent_id") or _id
+        if key not in best or comp > best[key][1]:
+            best[key] = (_id, comp, src)
+    scored = sorted(best.values(), key=lambda t: t[1], reverse=True)
     top = scored[:top_k]
 
-    top3 = [t[0] for t in top[:3]]
-    if top3:
+    # A demoted record is not "used" by showing up: bumping it is what fed it.
+    top3 = [t[0] for t in top[:3]
+            if not (t[0] in index_like and index_records == "demote")]
+    if top3 and bump_use:
         _spawn(bump_use_counts(top3))
 
     # `tags` belongs in the projection: recall ACCEPTS a tag filter, so a caller
     # enumerating by tag could filter on one and then not see which tags came
     # back. browse and get both return it (they project the whole _source), so
     # recall was the only read tool that dropped it.
+    # `id` stays the chunk's own _id (get(id) returns that chunk). `doc_id` is the
+    # id the WRITE returned: a knowledge document's parent_id, or the _id of a
+    # fact/episode/migrated document that has no parent. A caller can hand it
+    # straight to get / revise / forget. Dropping it here left the two ids
+    # unmatchable: a hit never said which `remember` it came from.
     hits = [{
         "id": _id,
+        "doc_id": src.get("parent_id") or _id,
+        "chunk_index": src.get("chunk_index"),
+        "dataset": src.get("dataset"),
+        "doc_key": src.get("doc_key"),
         "content": src.get("content", ""),
         "memory_type": src.get("memory_type"),
         "score": comp,
         "tags": src.get("tags") or [],
         "provenance": src.get("provenance", {}),
         "superseded": False,
+        "index_like": _id in index_like,
     } for _id, comp, src in top]
 
     result: dict = {"hits": hits}
@@ -1008,7 +1082,57 @@ async def get_with_chain(id: str, include_chain: bool = False) -> dict:
         raise ValueError(f"id {id} not found")
     src = {k: v for k, v in hit.get("_source", {}).items() if k != "embedding"}
     out: dict = {"id": id, **src}
+    if src.get("parent_id") == id:
+        # `id` is a document's parent id (what remember / ingest returned), not a
+        # chunk _id. _get_by_id_any hands back chunk 0, so without this a
+        # multi-chunk document read as its first ~1200 characters.
+        chunks = await _document_chunks(id)
+        if chunks:
+            out["content"] = join_chunks([c.get("content", "") for c in chunks])
+            out["chunk_count"] = len(chunks)
     out["chain"] = await _resolve_chain(id, hit["_source"]) if include_chain else []
+    return out
+
+
+DOC_CHUNK_FETCH_LIMIT = 2000
+
+
+async def _document_chunks(parent_id: str) -> list[dict]:
+    """Every chunk of one knowledge document in chunk_index order. No
+    superseded filter: a parent id's chunks are superseded together
+    (_supersede_parent), so a get on an old version still reads that whole
+    version rather than nothing."""
+    res = await _es_json(
+        "POST", f"/{KNOWLEDGE_INDEX}/_search",
+        {"size": DOC_CHUNK_FETCH_LIMIT,
+         "sort": [{"chunk_index": "asc"}],
+         "_source": {"excludes": ["embedding"]},
+         "query": {"term": {"parent_id": parent_id}}})
+    return [h.get("_source", {}) for h in res["hits"]["hits"]]
+
+
+_JOIN_MIN_OVERLAP = 8
+_JOIN_MAX_OVERLAP = 200
+
+
+def join_chunks(chunks: list[str]) -> str:
+    """Reassemble chunk_text() output: drop the overlap each chunk repeats from
+    its predecessor. chunk_text strips both ends of every chunk, so the repeated
+    region is matched on its trimmed form; with no overlap found (a chunk that
+    started past the previous end) the chunks are joined by a newline."""
+    out = ""
+    for chunk in chunks:
+        if not out:
+            out = chunk
+            continue
+        tail = out.rstrip()
+        cut = None
+        for k in range(min(len(chunk), _JOIN_MAX_OVERLAP), _JOIN_MIN_OVERLAP - 1, -1):
+            head = chunk[:k].rstrip()
+            if len(head) >= _JOIN_MIN_OVERLAP and tail.endswith(head):
+                cut = len(head)
+                break
+        out = tail + chunk[cut:] if cut is not None else tail + "\n" + chunk
     return out
 
 
