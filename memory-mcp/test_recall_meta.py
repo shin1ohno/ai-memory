@@ -55,6 +55,9 @@ def test_recall_is_always_loaded_on_the_wire():
           wire["recall"].get("_meta") == {"anthropic/alwaysLoad": True},
           f"got {wire['recall'].get('_meta')!r}")
     others = [n for n, t in wire.items() if n != "recall" and "anthropic/alwaysLoad" in (t.get("_meta") or {})]
+    props = wire["recall"]["inputSchema"]["properties"]
+    check("recall accepts index_records (default demote)",
+          props.get("index_records", {}).get("default") == "demote", f"got {props.get('index_records')!r}")
     check("no other tool is preloaded", not others, f"got {others!r}")
 
 

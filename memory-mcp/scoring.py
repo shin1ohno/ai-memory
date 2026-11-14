@@ -16,6 +16,11 @@ from datetime import datetime, timezone
 
 RRF_K = 60
 
+# Multiplier on a demoted (index-like) record's score. 2/71 / (2/61) = 0.859: a
+# demoted record must beat the others by about ten ranks in both legs to stay in
+# front of them.
+INDEX_FACTOR = 0.85
+
 
 def _extract_id(item) -> str:
     """A leg element may be an ES hit dict ({"_id": ...}) or a bare id string."""
@@ -96,23 +101,29 @@ def use_boost(use_count) -> float:
     return min(1.0 + 0.2 * math.log10(1 + uc), 1.4)
 
 
-def composite(rrf: float, source: dict, now, memory_type=None) -> float:
+def composite(rrf: float, source: dict, now, memory_type=None,
+              index_like: bool = False) -> float:
     """Multiplicative composite score for a single hit (contract §4).
 
     final = rrf * freshness(coalesce(last_used_at, written_at), now, offset)
                 * use_boost(use_count)
 
     offset = 30d for episodes (strong decay), else 180d.
+
+    An index-like record (a long note an agent keeps appending to) is scored
+    rrf * freshness(written_at) * INDEX_FACTOR: no use_boost and no last_used_at
+    recency. Both are fed by being returned, so a record that matches many
+    queries climbs on its own hits and stays on top.
     """
     source = source or {}
     last_used = source.get("last_used_at")
     written = (source.get("provenance") or {}).get("written_at")
-    ts = last_used or written
+    ts = written if index_like else (last_used or written)
     offset = 30.0 if memory_type == "episode" else 180.0
     fresh = freshness(ts, now, offset)
-    boost = use_boost(source.get("use_count"))
+    boost = 1.0 if index_like else use_boost(source.get("use_count"))
     try:
         base = float(rrf)
     except (TypeError, ValueError):
         base = 0.0
-    return base * fresh * boost
+    return base * fresh * boost * (INDEX_FACTOR if index_like else 1.0)
