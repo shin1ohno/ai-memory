@@ -556,8 +556,17 @@ async def recall(query: str, memory_type: str | None = None, top_k: int = 10,
     # enumerating by tag could filter on one and then not see which tags came
     # back. browse and get both return it (they project the whole _source), so
     # recall was the only read tool that dropped it.
+    # `id` stays the chunk's own _id (get(id) returns that chunk). `doc_id` is the
+    # id the WRITE returned: a knowledge document's parent_id, or the _id of a
+    # fact/episode/migrated document that has no parent. A caller can hand it
+    # straight to get / revise / forget. Dropping it here left the two ids
+    # unmatchable: a hit never said which `remember` it came from.
     hits = [{
         "id": _id,
+        "doc_id": src.get("parent_id") or _id,
+        "chunk_index": src.get("chunk_index"),
+        "dataset": src.get("dataset"),
+        "doc_key": src.get("doc_key"),
         "content": src.get("content", ""),
         "memory_type": src.get("memory_type"),
         "score": comp,
@@ -1008,7 +1017,57 @@ async def get_with_chain(id: str, include_chain: bool = False) -> dict:
         raise ValueError(f"id {id} not found")
     src = {k: v for k, v in hit.get("_source", {}).items() if k != "embedding"}
     out: dict = {"id": id, **src}
+    if src.get("parent_id") == id:
+        # `id` is a document's parent id (what remember / ingest returned), not a
+        # chunk _id. _get_by_id_any hands back chunk 0, so without this a
+        # multi-chunk document read as its first ~1200 characters.
+        chunks = await _document_chunks(id)
+        if chunks:
+            out["content"] = join_chunks([c.get("content", "") for c in chunks])
+            out["chunk_count"] = len(chunks)
     out["chain"] = await _resolve_chain(id, hit["_source"]) if include_chain else []
+    return out
+
+
+DOC_CHUNK_FETCH_LIMIT = 2000
+
+
+async def _document_chunks(parent_id: str) -> list[dict]:
+    """Every chunk of one knowledge document in chunk_index order. No
+    superseded filter: a parent id's chunks are superseded together
+    (_supersede_parent), so a get on an old version still reads that whole
+    version rather than nothing."""
+    res = await _es_json(
+        "POST", f"/{KNOWLEDGE_INDEX}/_search",
+        {"size": DOC_CHUNK_FETCH_LIMIT,
+         "sort": [{"chunk_index": "asc"}],
+         "_source": {"excludes": ["embedding"]},
+         "query": {"term": {"parent_id": parent_id}}})
+    return [h.get("_source", {}) for h in res["hits"]["hits"]]
+
+
+_JOIN_MIN_OVERLAP = 8
+_JOIN_MAX_OVERLAP = 200
+
+
+def join_chunks(chunks: list[str]) -> str:
+    """Reassemble chunk_text() output: drop the overlap each chunk repeats from
+    its predecessor. chunk_text strips both ends of every chunk, so the repeated
+    region is matched on its trimmed form; with no overlap found (a chunk that
+    started past the previous end) the chunks are joined by a newline."""
+    out = ""
+    for chunk in chunks:
+        if not out:
+            out = chunk
+            continue
+        tail = out.rstrip()
+        cut = None
+        for k in range(min(len(chunk), _JOIN_MAX_OVERLAP), _JOIN_MIN_OVERLAP - 1, -1):
+            head = chunk[:k].rstrip()
+            if len(head) >= _JOIN_MIN_OVERLAP and tail.endswith(head):
+                cut = len(head)
+                break
+        out = tail + chunk[cut:] if cut is not None else tail + "\n" + chunk
     return out
 
 
