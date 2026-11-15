@@ -561,9 +561,16 @@ async def recall(query: str, memory_type: str | None = None, top_k: int = 10,
     # fact/episode/migrated document that has no parent. A caller can hand it
     # straight to get / revise / forget. Dropping it here left the two ids
     # unmatchable: a hit never said which `remember` it came from.
+    # Exception: chunks migrated from cognee all share ONE parent_id (the literal
+    # "cognee", provenance.source_class "migration"), which is a bucket, not a
+    # document. get("cognee") returns the whole ~100k-character bucket and a
+    # collapse by doc_id would merge unrelated hits. Such a hit's doc_id is its own
+    # chunk id, so get(doc_id) returns that chunk. Keyed on the provenance class,
+    # not the name, so another migration bucket needs no code change.
     hits = [{
         "id": _id,
-        "doc_id": src.get("parent_id") or _id,
+        "doc_id": (_id if (src.get("provenance") or {}).get("source_class") == "migration"
+                   else src.get("parent_id") or _id),
         "chunk_index": src.get("chunk_index"),
         "dataset": src.get("dataset"),
         "doc_key": src.get("doc_key"),

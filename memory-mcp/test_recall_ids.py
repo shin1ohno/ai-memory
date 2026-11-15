@@ -178,6 +178,26 @@ def test_doc_id_falls_back_to_id_without_parent():
           f"got {hits[0]!r}")
 
 
+def test_migrated_chunks_sharing_a_bucket_parent_get_their_own_doc_id():
+    es = _Es()
+    mig = {"agent": "migration", "source_class": "migration"}
+    es.add({"content": "bug fix one", "memory_type": "knowledge", "parent_id": "cognee",
+            "chunk_index": 0, "provenance": mig}, "mig-a")
+    es.add({"content": "other note", "memory_type": "knowledge", "parent_id": "cognee",
+            "chunk_index": 1, "provenance": mig}, "mig-b")
+    es.add({"content": "real doc", "memory_type": "knowledge", "parent_id": "p1",
+            "chunk_index": 0, "provenance": {"source_class": "tool-output"}}, "real-chunk")
+    hits = _patched(es, lambda: run(be.recall("x", top_k=10)))["hits"]
+    got = {h["id"]: h["doc_id"] for h in hits}
+    check("migrated chunks: doc_id is the chunk's own id, not the shared parent",
+          got.get("mig-a") == "mig-a" and got.get("mig-b") == "mig-b", f"got {got!r}")
+    check("non-migrated hit keeps its parent_id", got.get("real-chunk") == "p1", f"got {got!r}")
+    one = _patched(es, lambda: run(be.get_with_chain(got["mig-a"])))
+    check("get(doc_id) of a migrated hit returns that chunk only",
+          one.get("content") == "bug fix one" and "chunk_count" not in one,
+          f"got {one.get('content', '')[:40]!r}")
+
+
 def test_remember_id_round_trips_to_recall_doc_id():
     es = _Es()
     text = ("Paragraph about doc ids. " * 120).strip()
