@@ -198,6 +198,22 @@ def test_migrated_chunks_sharing_a_bucket_parent_get_their_own_doc_id():
           f"got {one.get('content', '')[:40]!r}")
 
 
+def test_migrated_document_with_a_real_parent_keeps_its_parent_as_doc_id():
+    es = _Es()
+    mig = {"agent": "migration", "source_class": "migration"}
+    for i, text in enumerate(["first part. ", "second part. ", "third part."]):
+        es.add({"content": text, "memory_type": "knowledge", "parent_id": "realdoc",
+                "chunk_index": i, "dataset": "main_dataset", "provenance": mig}, f"rc{i}")
+    hits = _patched(es, lambda: run(be.recall("part", top_k=10)))["hits"]
+    check("migrated document with a real parent: every hit keeps doc_id == parent_id",
+          len(hits) == 3 and all(h["doc_id"] == "realdoc" for h in hits),
+          f"got {[h['doc_id'] for h in hits]!r}")
+    whole = _patched(es, lambda: run(be.get_with_chain("realdoc")))
+    check("get(doc_id) of a migrated real document returns the whole document",
+          whole.get("chunk_count") == 3 and "first part." in whole.get("content", "")
+          and "third part." in whole.get("content", ""), f"got {whole!r}"[:200])
+
+
 def test_remember_id_round_trips_to_recall_doc_id():
     es = _Es()
     text = ("Paragraph about doc ids. " * 120).strip()
