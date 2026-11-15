@@ -205,8 +205,8 @@ def test_migrated_document_with_a_real_parent_keeps_its_parent_as_doc_id():
         es.add({"content": text, "memory_type": "knowledge", "parent_id": "realdoc",
                 "chunk_index": i, "dataset": "main_dataset", "provenance": mig}, f"rc{i}")
     hits = _patched(es, lambda: run(be.recall("part", top_k=10)))["hits"]
-    check("migrated document with a real parent: every hit keeps doc_id == parent_id",
-          len(hits) == 3 and all(h["doc_id"] == "realdoc" for h in hits),
+    check("migrated document with a real parent: its chunks collapse into one hit with doc_id == parent_id",
+          len(hits) == 1 and hits[0]["doc_id"] == "realdoc",
           f"got {[h['doc_id'] for h in hits]!r}")
     whole = _patched(es, lambda: run(be.get_with_chain("realdoc")))
     check("get(doc_id) of a migrated real document returns the whole document",

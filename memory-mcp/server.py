@@ -153,7 +153,7 @@ async def recall(query: str, type: str | None = None, top_k: int = 10,
 
     Each hit's `doc_id` is the id `remember` / `ingest` / `revise` returned for
     that document: pass it to get, revise or forget. `id` is the matched chunk's
-    own id (get(id) returns just that chunk)."""
+    own id (get(id) returns just that chunk). A document yields at most one hit."""
     try:
         res = await be.recall(query, memory_type=type, top_k=top_k,
                               filters=filters, include_auto=include_auto)

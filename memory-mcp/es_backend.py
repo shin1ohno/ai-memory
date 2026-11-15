@@ -496,12 +496,35 @@ async def _ensure_alias(client: httpx.AsyncClient) -> None:
 # --------------------------------------------------------------------------- #
 # recall (contract §4)
 # --------------------------------------------------------------------------- #
+def _doc_id(_id: str, src: dict) -> str:
+    """The id the WRITE returned for the document a chunk belongs to: a
+    knowledge document's parent_id, or the chunk's own _id for a fact / episode /
+    migrated document that has no parent. Chunks migrated from cognee share ONE
+    parent_id (the bucket MIGRATION_BUCKET_PARENT, provenance.source_class
+    "migration"), which is not a document: get("cognee") returns the whole
+    ~100k-character bucket and a collapse by it would merge unrelated hits, so
+    such a chunk's doc_id is its own id. A migrated document with a real
+    parent_id keeps it."""
+    if (src.get("parent_id") == MIGRATION_BUCKET_PARENT
+            and (src.get("provenance") or {}).get("source_class") == "migration"):
+        return _id
+    return src.get("parent_id") or _id
+
+
 async def recall(query: str, memory_type: str | None = None, top_k: int = 10,
-                 filters: dict | None = None, include_auto: bool = True) -> dict:
+                 filters: dict | None = None, include_auto: bool = True,
+                 bump_use: bool = True) -> dict:
     """Hybrid BM25 + kNN retrieval with client-side RRF and multiplicative
     composite scoring. Excludes superseded docs. Returns an envelope
     {"hits": [...], "degraded"?}. Hits use the `memory_type` key (server remaps
-    to `type` for the tool schema)."""
+    to `type` for the tool schema).
+
+    Every document yields at most one hit (its best chunk), keyed on the hit's
+    `doc_id`; chunks migrated from cognee carry their own chunk id as `doc_id`,
+    so they stay separate hits. Fewer than `top_k` hits come back when the
+    candidates (the `max(50, 5 * top_k)` best of each leg) belong to fewer
+    documents. `bump_use=False` skips the use_count bump of the top hits (an
+    evaluation replay must not change the ranking it measures)."""
     fetch = max(50, 5 * top_k)
     index = _index_for(memory_type)
 
@@ -547,17 +570,19 @@ async def recall(query: str, memory_type: str | None = None, top_k: int = 10,
             sources.setdefault(h["_id"], h.get("_source", {}))
 
     now = datetime.now(timezone.utc)
-    scored: list[tuple[str, float, dict]] = []
+    best: dict[str, tuple[str, float, dict]] = {}
     for _id, base in rrf.items():
         src = sources.get(_id, {})
         mt = src.get("memory_type") or memory_type
-        scored.append((_id, scoring.composite(base, src, now, mt), src))
-    scored.sort(key=lambda t: t[1], reverse=True)
+        comp = scoring.composite(base, src, now, mt)
+        key = _doc_id(_id, src)
+        if key not in best or comp > best[key][1]:
+            best[key] = (_id, comp, src)
+    scored = sorted(best.values(), key=lambda t: t[1], reverse=True)
     top = scored[:top_k]
 
-    top3 = [t[0] for t in top[:3]]
-    if top3:
-        _spawn(bump_use_counts(top3))
+    if top and bump_use:
+        _spawn(bump_use_counts([t[0] for t in top[:3]]))
 
     # `tags` belongs in the projection: recall ACCEPTS a tag filter, so a caller
     # enumerating by tag could filter on one and then not see which tags came
@@ -568,17 +593,10 @@ async def recall(query: str, memory_type: str | None = None, top_k: int = 10,
     # fact/episode/migrated document that has no parent. A caller can hand it
     # straight to get / revise / forget. Dropping it here left the two ids
     # unmatchable: a hit never said which `remember` it came from.
-    # Exception: chunks migrated from cognee share ONE parent_id (the bucket
-    # MIGRATION_BUCKET_PARENT, provenance.source_class "migration"), which is not
-    # a document. get("cognee") returns the whole ~100k-character bucket and a
-    # collapse by doc_id would merge unrelated hits. Such a hit's doc_id is its
-    # own chunk id, so get(doc_id) returns that chunk. A migrated document with
-    # a real parent_id keeps it.
+    # (_doc_id has the migrated-bucket exception.)
     hits = [{
         "id": _id,
-        "doc_id": (_id if (src.get("parent_id") == MIGRATION_BUCKET_PARENT
-                           and (src.get("provenance") or {}).get("source_class") == "migration")
-                   else src.get("parent_id") or _id),
+        "doc_id": _doc_id(_id, src),
         "chunk_index": src.get("chunk_index"),
         "dataset": src.get("dataset"),
         "doc_key": src.get("doc_key"),
