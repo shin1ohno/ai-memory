@@ -46,6 +46,13 @@ STATS_INDEX = os.environ.get("STATS_INDEX", "memory-stats")
 ALL_ALIAS = os.environ.get("ALL_ALIAS", "memory-all")
 
 RRF_K = 60
+
+# parent_id shared by the chunks migrated from cognee. It is a bucket, not a
+# document: in production 109 of the 114 knowledge records with source_class
+# "migration" carry it, while the other 5 are the chunks of ONE real migrated
+# document with its own parent_id. Provenance alone cannot tell the two apart,
+# so the bucket is named.
+MIGRATION_BUCKET_PARENT = "cognee"
 EPISODE_TTL_DAYS = 90
 INGEST_JOB_THRESHOLD = 40  # >40 chunks → background job
 # browse has no cursor, so a caller wanting a full enumeration raises `limit`.
@@ -561,9 +568,17 @@ async def recall(query: str, memory_type: str | None = None, top_k: int = 10,
     # fact/episode/migrated document that has no parent. A caller can hand it
     # straight to get / revise / forget. Dropping it here left the two ids
     # unmatchable: a hit never said which `remember` it came from.
+    # Exception: chunks migrated from cognee share ONE parent_id (the bucket
+    # MIGRATION_BUCKET_PARENT, provenance.source_class "migration"), which is not
+    # a document. get("cognee") returns the whole ~100k-character bucket and a
+    # collapse by doc_id would merge unrelated hits. Such a hit's doc_id is its
+    # own chunk id, so get(doc_id) returns that chunk. A migrated document with
+    # a real parent_id keeps it.
     hits = [{
         "id": _id,
-        "doc_id": src.get("parent_id") or _id,
+        "doc_id": (_id if (src.get("parent_id") == MIGRATION_BUCKET_PARENT
+                           and (src.get("provenance") or {}).get("source_class") == "migration")
+                   else src.get("parent_id") or _id),
         "chunk_index": src.get("chunk_index"),
         "dataset": src.get("dataset"),
         "doc_key": src.get("doc_key"),
