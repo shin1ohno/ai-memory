@@ -496,49 +496,35 @@ async def _ensure_alias(client: httpx.AsyncClient) -> None:
 # --------------------------------------------------------------------------- #
 # recall (contract §4)
 # --------------------------------------------------------------------------- #
-# An "index-like" record is a long note an agent keeps appending to (a project
-# log mirrored from a file-memory note). It matches many unrelated queries, and
-# being returned raises its use_count and refreshes last_used_at, which raise its
-# next score. Judged from stored fields only; nothing is written to the record.
-INDEX_DATASETS = ("file-memory",)
-INDEX_MIN_CHUNKS = 5
-INDEX_RECORDS_MODES = ("demote", "include", "exclude")
-
-
-async def _live_chunk_counts(parent_ids: list[str]) -> dict[str, int]:
-    """parent_id -> number of live (not superseded) chunks, in one query."""
-    body = {
-        "size": 0,
-        "query": {"bool": {
-            "filter": [{"terms": {"parent_id": parent_ids}}],
-            "must_not": [{"exists": {"field": "superseded_by"}}],
-        }},
-        "aggs": {"by_parent": {"terms": {"field": "parent_id",
-                                         "size": len(parent_ids)}}},
-    }
-    res = await _es_json("POST", f"/{KNOWLEDGE_INDEX}/_search", body)
-    buckets = res["aggregations"]["by_parent"]["buckets"]
-    return {b["key"]: b["doc_count"] for b in buckets}
+def _doc_id(_id: str, src: dict) -> str:
+    """The id the WRITE returned for the document a chunk belongs to: a
+    knowledge document's parent_id, or the chunk's own _id for a fact / episode /
+    migrated document that has no parent. Chunks migrated from cognee share ONE
+    parent_id (the bucket MIGRATION_BUCKET_PARENT, provenance.source_class
+    "migration"), which is not a document: get("cognee") returns the whole
+    ~100k-character bucket and a collapse by it would merge unrelated hits, so
+    such a chunk's doc_id is its own id. A migrated document with a real
+    parent_id keeps it."""
+    if (src.get("parent_id") == MIGRATION_BUCKET_PARENT
+            and (src.get("provenance") or {}).get("source_class") == "migration"):
+        return _id
+    return src.get("parent_id") or _id
 
 
 async def recall(query: str, memory_type: str | None = None, top_k: int = 10,
                  filters: dict | None = None, include_auto: bool = True,
-                 index_records: str = "demote", bump_use: bool = True) -> dict:
+                 bump_use: bool = True) -> dict:
     """Hybrid BM25 + kNN retrieval with client-side RRF and multiplicative
     composite scoring. Excludes superseded docs. Returns an envelope
     {"hits": [...], "degraded"?}. Hits use the `memory_type` key (server remaps
     to `type` for the tool schema).
 
-    Every document yields at most one hit (its best chunk). `index_records`
-    decides what happens to index-like records (INDEX_DATASETS knowledge
-    documents with INDEX_MIN_CHUNKS or more live chunks): "demote" (default)
-    scores them without use_count or last_used_at and times INDEX_FACTOR and
-    never bumps them; "include" scores them like any other record; "exclude"
-    drops them. `bump_use=False` skips the use_count bump of the top hits (an
+    Every document yields at most one hit (its best chunk), keyed on the hit's
+    `doc_id`; chunks migrated from cognee carry their own chunk id as `doc_id`,
+    so they stay separate hits. Fewer than `top_k` hits come back when the
+    candidates (the `max(50, 5 * top_k)` best of each leg) belong to fewer
+    documents. `bump_use=False` skips the use_count bump of the top hits (an
     evaluation replay must not change the ranking it measures)."""
-    if index_records not in INDEX_RECORDS_MODES:
-        raise QueryError(f"index_records must be one of {list(INDEX_RECORDS_MODES)}, "
-                         f"got {index_records!r}")
     fetch = max(50, 5 * top_k)
     index = _index_for(memory_type)
 
@@ -583,45 +569,20 @@ async def recall(query: str, memory_type: str | None = None, top_k: int = 10,
         for h in leg:
             sources.setdefault(h["_id"], h.get("_source", {}))
 
-    # Which candidates are index-like. The count query is sent only when some
-    # candidate could be (a file-memory knowledge chunk); a failure is reported,
-    # not papered over with the old scoring.
-    index_like: set[str] = set()
-    parents = sorted({s["parent_id"] for s in sources.values()
-                      if s.get("dataset") in INDEX_DATASETS and s.get("parent_id")})
-    if parents:
-        try:
-            counts = await _live_chunk_counts(parents)
-            big = {p for p, n in counts.items() if n >= INDEX_MIN_CHUNKS}
-            index_like = {i for i, s in sources.items()
-                          if s.get("dataset") in INDEX_DATASETS
-                          and s.get("parent_id") in big}
-        except Exception:  # noqa: BLE001 — judged below as "index-check-skipped"
-            degraded = "bm25-only+index-check-skipped" if degraded else "index-check-skipped"
-
     now = datetime.now(timezone.utc)
     best: dict[str, tuple[str, float, dict]] = {}
     for _id, base in rrf.items():
         src = sources.get(_id, {})
-        like = _id in index_like
-        if like and index_records == "exclude":
-            continue
         mt = src.get("memory_type") or memory_type
-        if like and index_records == "demote":
-            comp = scoring.composite(base, src, now, mt, index_like=True)
-        else:
-            comp = scoring.composite(base, src, now, mt)
-        key = src.get("parent_id") or _id
+        comp = scoring.composite(base, src, now, mt)
+        key = _doc_id(_id, src)
         if key not in best or comp > best[key][1]:
             best[key] = (_id, comp, src)
     scored = sorted(best.values(), key=lambda t: t[1], reverse=True)
     top = scored[:top_k]
 
-    # A demoted record is not "used" by showing up: bumping it is what fed it.
-    top3 = [t[0] for t in top[:3]
-            if not (t[0] in index_like and index_records == "demote")]
-    if top3 and bump_use:
-        _spawn(bump_use_counts(top3))
+    if top and bump_use:
+        _spawn(bump_use_counts([t[0] for t in top[:3]]))
 
     # `tags` belongs in the projection: recall ACCEPTS a tag filter, so a caller
     # enumerating by tag could filter on one and then not see which tags came
@@ -632,17 +593,10 @@ async def recall(query: str, memory_type: str | None = None, top_k: int = 10,
     # fact/episode/migrated document that has no parent. A caller can hand it
     # straight to get / revise / forget. Dropping it here left the two ids
     # unmatchable: a hit never said which `remember` it came from.
-    # Exception: chunks migrated from cognee share ONE parent_id (the bucket
-    # MIGRATION_BUCKET_PARENT, provenance.source_class "migration"), which is not
-    # a document. get("cognee") returns the whole ~100k-character bucket and a
-    # collapse by doc_id would merge unrelated hits. Such a hit's doc_id is its
-    # own chunk id, so get(doc_id) returns that chunk. A migrated document with
-    # a real parent_id keeps it.
+    # (_doc_id has the migrated-bucket exception.)
     hits = [{
         "id": _id,
-        "doc_id": (_id if (src.get("parent_id") == MIGRATION_BUCKET_PARENT
-                           and (src.get("provenance") or {}).get("source_class") == "migration")
-                   else src.get("parent_id") or _id),
+        "doc_id": _doc_id(_id, src),
         "chunk_index": src.get("chunk_index"),
         "dataset": src.get("dataset"),
         "doc_key": src.get("doc_key"),
@@ -652,7 +606,6 @@ async def recall(query: str, memory_type: str | None = None, top_k: int = 10,
         "tags": src.get("tags") or [],
         "provenance": src.get("provenance", {}),
         "superseded": False,
-        "index_like": _id in index_like,
     } for _id, comp, src in top]
 
     result: dict = {"hits": hits}

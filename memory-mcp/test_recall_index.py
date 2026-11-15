@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
-"""Index-like records (long file-memory notes) are demoted in recall.
+"""recall returns one hit per document and demotes nothing.
 
 An agent-maintained project note mirrored into file-memory is chunked into many
-pieces and matches a wide range of queries. Each time it is returned in the top
-3 its use_count rises and last_used_at refreshes, which raises its next score, so
-it climbs on its own hits (SH1-244: 21.6% of the hit slots and 26.1% of the
-rank-1 positions in the SH1-230 sample were 18 such documents). recall now:
+pieces and matches a wide range of queries; without a collapse it fills several
+of the top slots with itself (SH1-244: 206 slots in the SH1-262 sample repeated
+a document). SH1-262 also judged a demotion of such "index-like" records (x0.85,
+no use / recency boost): it made the top better in 18 of 43 changed queries and
+worse in 12, while the collapse alone made no top-1 worse. Owner decision
+2026-11-15 (SH1-272): ship the collapse only. recall now:
 
-1. scores an index-like record (dataset file-memory, 5+ live chunks) as
-   rrf * freshness(written_at) * 0.85: no use_boost, no last_used_at recency;
-2. never bumps it;
-3. returns one hit per document;
-4. takes index_records = demote (default) | include | exclude;
-5. takes bump_use=False so an evaluation replay changes no record.
-
-The index-like rule uses stored fields only; the live chunk count is one
-aggregation query, sent only when a candidate could be index-like.
+1. returns one hit per `doc_id` (the document's best chunk), collapsing BEFORE
+   top_k is applied, so top_k counts documents;
+2. keeps chunks migrated from cognee (parent_id "cognee", source_class
+   "migration"; their doc_id is their own chunk id) as separate hits, while the
+   chunks of a migrated document with a real parent_id collapse into one;
+3. scores and bumps every record alike: no demotion multiplier, no use_count /
+   last_used_at change for long file-memory notes, no count query, no
+   `index_like` field, no `index_records` argument;
+4. takes bump_use=False so an evaluation replay changes no record.
 
 Dependency-free like test_tag_preservation: httpx is stubbed, nothing talks to ES.
 
@@ -198,49 +200,54 @@ def ids(res):
     return [h["id"] for h in res["hits"]]
 
 
-def test_composite_index_like_value():
-    now = NOW
+def docs(res):
+    return [h["doc_id"] for h in res["hits"]]
+
+
+def test_composite_has_no_demotion():
     src = {"use_count": 100, "last_used_at": iso(0), "provenance": {"written_at": iso(400)}}
-    got = scoring.composite(0.03, src, now, "knowledge", index_like=True)
-    want = 0.03 * scoring.freshness(iso(400), now, 180.0) * 0.85
-    check("index_like composite = rrf * freshness(written_at) * 0.85",
+    got = scoring.composite(0.03, src, NOW, "knowledge")
+    want = (0.03 * scoring.freshness(iso(0), NOW, 180.0) * scoring.use_boost(100))
+    check("composite = rrf * freshness(last_used_at) * use_boost, nothing else",
           abs(got - want) < 1e-12, f"got {got!r} want {want!r}")
-    plain = scoring.composite(0.03, src, now, "knowledge")
-    check("without index_like the use_count boost and last_used_at still apply",
-          plain > got * 1.4, f"plain {plain!r} demoted {got!r}")
-
-
-def test_default_demotes_hub_below_equal_fact():
-    res, _ = recall(hub_and_fact())
-    check("default: the fact outranks the demoted hub", ids(res)[0] == "fact-1", f"got {ids(res)!r}")
-    hub = next(h for h in res["hits"] if h["doc_id"] == "hub-doc")
-    check("the hub hit says index_like: true", hub["index_like"] is True, f"got {hub!r}")
-    check("the fact hit says index_like: false",
-          res["hits"][0]["index_like"] is False, f"got {res['hits'][0]!r}")
-
-
-def test_index_records_modes():
-    res, _ = recall(hub_and_fact(), index_records="include")
-    check("include: the hub keeps its boosted first place", ids(res)[0] == "hub-0", f"got {ids(res)!r}")
-    check("include: the hub is still flagged", res["hits"][0]["index_like"] is True)
-    res, _ = recall(hub_and_fact(), index_records="exclude")
-    check("exclude: no hub hit", all(h["doc_id"] != "hub-doc" for h in res["hits"]), f"got {ids(res)!r}")
-    check("exclude: other records remain", ids(res) == ["fact-1"], f"got {ids(res)!r}")
     try:
-        recall(hub_and_fact(), index_records="bogus")
-        check("an unknown index_records raises QueryError", False, "no exception")
-    except be.QueryError:
-        check("an unknown index_records raises QueryError", True)
+        scoring.composite(0.03, src, NOW, "knowledge", index_like=True)
+        check("composite has no index_like switch", False, "index_like accepted")
+    except TypeError:
+        check("composite has no index_like switch", True)
 
 
-def test_bump_skips_index_like_and_honours_the_flag():
-    _, bumped = recall(hub_and_fact())
+def test_default_does_not_demote_a_long_file_memory_note():
+    es = hub_and_fact()
+    res, bumped = recall(es)
+    check("the hub (file-memory, 6 chunks, heavily used) keeps its first place",
+          ids(res)[0] == "hub-0", f"got {ids(res)!r}")
+    hub, fact = res["hits"][0], res["hits"][1]
+    rrf = scoring.rrf_fuse([es.docs, es.docs], k=be.RRF_K)
+    want = scoring.composite(rrf["hub-0"], es.docs[0]["_source"], NOW, "knowledge")
+    check("the hub's score is the undemoted composite (no x0.85)",
+          abs(hub["score"] - want) < 1e-9 * max(1.0, want), f"got {hub['score']!r} want {want!r}")
+    check("the hub outscores the equally ranked fact by its use/recency boost",
+          hub["score"] > fact["score"], f"got {hub['score']!r} vs {fact['score']!r}")
+    check("no hit carries an index_like field", all("index_like" not in h for h in res["hits"]),
+          f"got {res['hits']!r}")
     flat = [i for b in bumped for i in b]
-    check("demote: index-like ids are not bumped", not any(i.startswith("hub-") for i in flat), f"got {flat!r}")
-    check("demote: the other top hits still are", "fact-1" in flat, f"got {flat!r}")
-    _, bumped = recall(hub_and_fact(), index_records="include")
-    flat = [i for b in bumped for i in b]
-    check("include: the hub is bumped as before", "hub-0" in flat, f"got {flat!r}")
+    check("the hub is bumped like any top hit", "hub-0" in flat and "fact-1" in flat, f"got {flat!r}")
+
+
+def test_no_count_query_and_no_index_records_argument():
+    es = hub_and_fact()
+    recall(es)
+    check("recall sends only the two searches (no chunk-count aggregation)",
+          es.agg_queries() == [] and len(es.bodies) == 2, f"got {len(es.bodies)} bodies, {len(es.agg_queries())} aggs")
+    try:
+        recall(hub_and_fact(), index_records="demote")
+        check("recall has no index_records argument", False, "accepted")
+    except TypeError:
+        check("recall has no index_records argument", True)
+
+
+def test_bump_use_flag():
     _, bumped = recall(hub_and_fact(), bump_use=False)
     check("bump_use=False: nothing is bumped", bumped == [], f"got {bumped!r}")
 
@@ -252,37 +259,66 @@ def test_one_hit_per_document():
                parent_id="p1", chunk_index=i, provenance={"written_at": iso(1)})
     es.add("other", content="o", memory_type="fact", provenance={"written_at": iso(1)})
     res, _ = recall(es)
-    docs = [h["doc_id"] for h in res["hits"]]
-    check("chunks of one parent_id collapse to one hit", docs.count("p1") == 1 and len(docs) == 2, f"got {docs!r}")
+    check("chunks of one parent_id collapse to one hit", docs(res).count("p1") == 1 and len(docs(res)) == 2,
+          f"got {docs(res)!r}")
     check("the kept chunk is the best-ranked one", res["hits"][0]["id"] == "c0", f"got {ids(res)!r}")
 
 
-def test_rule_thresholds_and_no_extra_query():
-    res, _ = recall(hub_and_fact(hub_chunks=4))
-    check("file-memory with 4 live chunks is not index-like",
-          not any(h["index_like"] for h in res["hits"]) and ids(res)[0] == "hub-0", f"got {res['hits']!r}")
-    es = hub_and_fact(dataset="notes")
-    res, _ = recall(es)
-    check("a 6-chunk document outside file-memory is not index-like",
-          not any(h["index_like"] for h in res["hits"]))
-    check("no file-memory candidate sends no count query", es.agg_queries() == [])
-    es = hub_and_fact()
-    recall(es)
-    check("a file-memory candidate sends exactly one count query", len(es.agg_queries()) == 1, f"got {len(es.agg_queries())}")
-    es = hub_and_fact()
-    for d in es.docs:
-        if d["_id"] in ("hub-4", "hub-5"):
-            d["_source"]["superseded_by"] = "x"
-    res, _ = recall(es)
-    check("superseded chunks do not count toward the 5", not any(h["index_like"] for h in res["hits"]))
+def test_long_file_memory_note_collapses():
+    res, _ = recall(hub_and_fact())
+    check("the 6 chunks of a file-memory note are one hit", docs(res) == ["hub-doc", "fact-1"], f"got {docs(res)!r}")
 
 
-def test_count_failure_is_reported_not_hidden():
-    es = hub_and_fact()
-    es.fail_aggs = True
+def test_migrated_document_with_a_real_parent_collapses():
+    es = _Es()
+    for i in range(5):
+        es.add(f"m{i}", content=f"m{i}", memory_type="knowledge", dataset="main_dataset",
+               parent_id="50912c716c6245b62597f69a070fe120", chunk_index=i,
+               provenance={"source_class": "migration", "written_at": iso(30)})
     res, _ = recall(es)
-    check("a failed count query reports degraded", res.get("degraded") == "index-check-skipped", f"got {res.get('degraded')!r}")
-    check("and still returns hits", len(res["hits"]) == 2, f"got {ids(res)!r}")
+    check("5 chunks of one migrated document with a real parent are one hit",
+          docs(res) == ["50912c716c6245b62597f69a070fe120"] and ids(res) == ["m0"], f"got {docs(res)!r} {ids(res)!r}")
+
+
+def test_cognee_bucket_chunks_stay_separate():
+    es = _Es()
+    for i in range(4):
+        es.add(f"g{i}", content=f"g{i}", memory_type="knowledge", dataset="main_dataset",
+               parent_id=be.MIGRATION_BUCKET_PARENT, chunk_index=i,
+               provenance={"source_class": "migration", "written_at": iso(30)})
+    res, _ = recall(es)
+    check("cognee-bucket chunks are one hit per chunk", ids(res) == ["g0", "g1", "g2", "g3"], f"got {ids(res)!r}")
+    check("each carries its own chunk id as doc_id", docs(res) == ids(res), f"got {docs(res)!r}")
+    es = _Es()
+    for i in range(3):
+        es.add(f"n{i}", content=f"n{i}", memory_type="knowledge", dataset="x",
+               parent_id=be.MIGRATION_BUCKET_PARENT, provenance={"written_at": iso(30)})
+    res, _ = recall(es)
+    check("a parent_id of 'cognee' without source_class migration is an ordinary parent: one hit",
+          docs(res) == [be.MIGRATION_BUCKET_PARENT], f"got {docs(res)!r}")
+
+
+def test_facts_without_a_parent_never_merge():
+    es = _Es()
+    for i in range(3):
+        es.add(f"f{i}", content=f"f{i}", memory_type="fact", provenance={"written_at": iso(1)})
+    res, _ = recall(es)
+    check("parentless records are one hit each", ids(res) == ["f0", "f1", "f2"], f"got {ids(res)!r}")
+
+
+def test_top_k_counts_documents():
+    es = _Es()
+    for i in range(6):
+        es.add(f"a{i}", content="a", memory_type="knowledge", dataset="notes", parent_id="A",
+               chunk_index=i, provenance={"written_at": iso(1)})
+    for j in range(3):
+        es.add(f"b{j}", content="b", memory_type="fact", provenance={"written_at": iso(1)})
+    res, _ = recall(es, top_k=3)
+    check("collapse happens before top_k: 3 documents, not 1 document + 2 repeats",
+          docs(res) == ["A", "b0", "b1"], f"got {docs(res)!r}")
+    res, _ = recall(es, top_k=10)
+    check("fewer documents than top_k: fewer hits come back, none padded",
+          docs(res) == ["A", "b0", "b1", "b2"], f"got {docs(res)!r}")
 
 
 if __name__ == "__main__":
