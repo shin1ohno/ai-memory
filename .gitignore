@@ -1,3 +1,4 @@
 .venv/
 .venv-proxy/
 __pycache__/
+.venv-audit/
