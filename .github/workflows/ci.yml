@@ -114,3 +114,6 @@ jobs:
 
       - name: File-memory mirror hook suite
         run: make test-mirror-hook
+
+      - name: Audit hash-locked dependencies
+        run: make audit
