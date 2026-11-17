@@ -17,7 +17,7 @@
 # and `FastMCP.streamable_http_app()`. It did not, once 2.x shipped. Porting to the
 # 2.x API is a separate piece of work; raising this ceiling without doing that port
 # breaks the server.
-mcp>=1.12,<2
+mcp>=1.30.0,<2
 
 starlette>=0.37.0
 uvicorn>=0.30.0
