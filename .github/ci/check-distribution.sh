@@ -78,15 +78,8 @@ for unit in memory-mcp memory-keeper; do
     mkdir -p "$inst/$(dirname "$f")"; cp "$dir/$f" "$inst/$f"
   done < <(manifest_entries "$unit")
   mods=$(manifest_entries "$unit" | grep -E '^[^/]+\.py$' | sed 's/\.py$//' | tr '\n' ' ')
-  # server.py runs `asyncio.run(be.ensure_indices())` at IMPORT time (ES
-  # bootstrap coupled to module load), so a hermetic import would try to reach
-  # ES. It is byte-compiled AND its third-party import lines (mcp / starlette /
-  # httpx / uvicorn) are executed against the real wheels — the mcp 2.x
-  # `mcp.server.fastmcp` removal that crash-looped the unit in 2026-08 is
-  # exactly an import-line failure (review F7). The four leaf modules import
-  # for real. Decoupling the bootstrap into the lifespan is the next step.
+  # Startup I/O belongs to the lifespan; import the entire deployed artifact.
   compile_only=""
-  if [[ "$unit" == memory-mcp ]]; then compile_only="server"; mods=$(tr ' ' '\n' <<<"$mods" | grep -vx server | tr '\n' ' '); fi
   py=python3
   if [[ "$unit" == memory-mcp ]]; then
     if [[ -n "${MEMORY_MCP_PYTHON:-}" ]]; then py="$(cd "$(dirname "$MEMORY_MCP_PYTHON")" && pwd)/$(basename "$MEMORY_MCP_PYTHON")"; else
