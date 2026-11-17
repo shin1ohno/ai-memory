@@ -12,11 +12,11 @@ SHELL := /bin/bash
 
 PYTHON ?= python3
 
-# The server venv, from the same requirements-v2.txt the host installs.
+# Both test venvs use the same hash-locked graph as the shared host venv.
 VENV := .venv
 VENV_PY := $(CURDIR)/$(VENV)/bin/python
 VENV_STAMP := $(VENV)/.requirements-v2.stamp
-# The auth proxy runs on requirements.txt's wheels (aiohttp, PyJWT, OpenTelemetry).
+# The separate proxy venv keeps its process-level instrumentation isolated.
 PROXY_VENV := .venv-proxy
 PROXY_PY := $(CURDIR)/$(PROXY_VENV)/bin/python
 PROXY_STAMP := $(PROXY_VENV)/.requirements.stamp
@@ -32,14 +32,14 @@ venv: $(VENV_STAMP)
 venv-proxy: $(PROXY_STAMP)
 
 # A stamp, not the interpreter: bin/python is a symlink to the system python.
-$(VENV_STAMP): requirements-v2.txt
+$(VENV_STAMP): requirements.lock
 	$(PYTHON) -m venv $(VENV)
-	$(VENV_PY) -m pip install -q -r requirements-v2.txt
+	$(VENV_PY) -m pip install -q --require-hashes -r requirements.lock
 	touch $@
 
-$(PROXY_STAMP): requirements.txt
+$(PROXY_STAMP): requirements.lock
 	$(PYTHON) -m venv $(PROXY_VENV)
-	$(PROXY_PY) -m pip install -q -r requirements.txt
+	$(PROXY_PY) -m pip install -q --require-hashes -r requirements.lock
 	touch $@
 
 # Each run is announced by an `=== RUN <suite>` line; ci.yml attributes the
@@ -89,3 +89,10 @@ test-http:
 	@if [ ! -f tests/http_roundtrip/run.py ]; then echo "make test-http: tests/http_roundtrip/run.py does not exist" >&2; exit 1; fi
 	@$(MAKE) --no-print-directory venv
 	$(VENV_PY) tests/http_roundtrip/run.py
+
+# The audit tool is isolated from the runtime dependency graph.
+.PHONY: audit
+audit:
+	$(PYTHON) -m venv .venv-audit
+	.venv-audit/bin/python -m pip install -q pip-audit==2.10.1
+	.venv-audit/bin/pip-audit --require-hashes -r requirements.lock
