@@ -46,6 +46,13 @@ STATS_INDEX = os.environ.get("STATS_INDEX", "memory-stats")
 ALL_ALIAS = os.environ.get("ALL_ALIAS", "memory-all")
 
 RRF_K = 60
+
+# parent_id shared by the chunks migrated from cognee. It is a bucket, not a
+# document: in production 109 of the 114 knowledge records with source_class
+# "migration" carry it, while the other 5 are the chunks of ONE real migrated
+# document with its own parent_id. Provenance alone cannot tell the two apart,
+# so the bucket is named.
+MIGRATION_BUCKET_PARENT = "cognee"
 EPISODE_TTL_DAYS = 90
 INGEST_JOB_THRESHOLD = 40  # >40 chunks → background job
 # browse has no cursor, so a caller wanting a full enumeration raises `limit`.
@@ -487,12 +494,35 @@ async def _ensure_alias(client: httpx.AsyncClient) -> None:
 # --------------------------------------------------------------------------- #
 # recall (contract §4)
 # --------------------------------------------------------------------------- #
+def _doc_id(_id: str, src: dict) -> str:
+    """The id the WRITE returned for the document a chunk belongs to: a
+    knowledge document's parent_id, or the chunk's own _id for a fact / episode /
+    migrated document that has no parent. Chunks migrated from cognee share ONE
+    parent_id (the bucket MIGRATION_BUCKET_PARENT, provenance.source_class
+    "migration"), which is not a document: get("cognee") returns the whole
+    ~100k-character bucket and a collapse by it would merge unrelated hits, so
+    such a chunk's doc_id is its own id. A migrated document with a real
+    parent_id keeps it."""
+    if (src.get("parent_id") == MIGRATION_BUCKET_PARENT
+            and (src.get("provenance") or {}).get("source_class") == "migration"):
+        return _id
+    return src.get("parent_id") or _id
+
+
 async def recall(query: str, memory_type: str | None = None, top_k: int = 10,
-                 filters: dict | None = None, include_auto: bool = True) -> dict:
+                 filters: dict | None = None, include_auto: bool = True,
+                 bump_use: bool = True) -> dict:
     """Hybrid BM25 + kNN retrieval with client-side RRF and multiplicative
     composite scoring. Excludes superseded docs. Returns an envelope
     {"hits": [...], "degraded"?}. Hits use the `memory_type` key (server remaps
-    to `type` for the tool schema)."""
+    to `type` for the tool schema).
+
+    Every document yields at most one hit (its best chunk), keyed on the hit's
+    `doc_id`; chunks migrated from cognee carry their own chunk id as `doc_id`,
+    so they stay separate hits. Fewer than `top_k` hits come back when the
+    candidates (the `max(50, 5 * top_k)` best of each leg) belong to fewer
+    documents. `bump_use=False` skips the use_count bump of the top hits (an
+    evaluation replay must not change the ranking it measures)."""
     fetch = max(50, 5 * top_k)
     index = _index_for(memory_type)
 
@@ -548,24 +578,36 @@ async def recall(query: str, memory_type: str | None = None, top_k: int = 10,
             sources.setdefault(h["_id"], h.get("_source", {}))
 
     now = datetime.now(timezone.utc)
-    scored: list[tuple[str, float, dict]] = []
+    best: dict[str, tuple[str, float, dict]] = {}
     for _id, base in rrf.items():
         src = sources.get(_id, {})
         mt = src.get("memory_type") or memory_type
-        scored.append((_id, scoring.composite(base, src, now, mt), src))
-    scored.sort(key=lambda t: t[1], reverse=True)
+        comp = scoring.composite(base, src, now, mt)
+        key = _doc_id(_id, src)
+        if key not in best or comp > best[key][1]:
+            best[key] = (_id, comp, src)
+    scored = sorted(best.values(), key=lambda t: t[1], reverse=True)
     top = scored[:top_k]
 
-    top3 = [t[0] for t in top[:3]]
-    if top3:
-        _spawn(bump_use_counts(top3))
+    if top and bump_use:
+        _spawn(bump_use_counts([t[0] for t in top[:3]]))
 
     # `tags` belongs in the projection: recall ACCEPTS a tag filter, so a caller
     # enumerating by tag could filter on one and then not see which tags came
     # back. browse and get both return it (they project the whole _source), so
     # recall was the only read tool that dropped it.
+    # `id` stays the chunk's own _id (get(id) returns that chunk). `doc_id` is the
+    # id the WRITE returned: a knowledge document's parent_id, or the _id of a
+    # fact/episode/migrated document that has no parent. A caller can hand it
+    # straight to get / revise / forget. Dropping it here left the two ids
+    # unmatchable: a hit never said which `remember` it came from.
+    # (_doc_id has the migrated-bucket exception.)
     hits = [{
         "id": _id,
+        "doc_id": _doc_id(_id, src),
+        "chunk_index": src.get("chunk_index"),
+        "dataset": src.get("dataset"),
+        "doc_key": src.get("doc_key"),
         "content": src.get("content", ""),
         "memory_type": src.get("memory_type"),
         "score": comp,
@@ -1016,7 +1058,57 @@ async def get_with_chain(id: str, include_chain: bool = False) -> dict:
         raise ValueError(f"id {id} not found")
     src = {k: v for k, v in hit.get("_source", {}).items() if k != "embedding"}
     out: dict = {"id": id, **src}
+    if src.get("parent_id") == id:
+        # `id` is a document's parent id (what remember / ingest returned), not a
+        # chunk _id. _get_by_id_any hands back chunk 0, so without this a
+        # multi-chunk document read as its first ~1200 characters.
+        chunks = await _document_chunks(id)
+        if chunks:
+            out["content"] = join_chunks([c.get("content", "") for c in chunks])
+            out["chunk_count"] = len(chunks)
     out["chain"] = await _resolve_chain(id, hit["_source"]) if include_chain else []
+    return out
+
+
+DOC_CHUNK_FETCH_LIMIT = 2000
+
+
+async def _document_chunks(parent_id: str) -> list[dict]:
+    """Every chunk of one knowledge document in chunk_index order. No
+    superseded filter: a parent id's chunks are superseded together
+    (_supersede_parent), so a get on an old version still reads that whole
+    version rather than nothing."""
+    res = await _es_json(
+        "POST", f"/{KNOWLEDGE_INDEX}/_search",
+        {"size": DOC_CHUNK_FETCH_LIMIT,
+         "sort": [{"chunk_index": "asc"}],
+         "_source": {"excludes": ["embedding"]},
+         "query": {"term": {"parent_id": parent_id}}})
+    return [h.get("_source", {}) for h in res["hits"]["hits"]]
+
+
+_JOIN_MIN_OVERLAP = 8
+_JOIN_MAX_OVERLAP = 200
+
+
+def join_chunks(chunks: list[str]) -> str:
+    """Reassemble chunk_text() output: drop the overlap each chunk repeats from
+    its predecessor. chunk_text strips both ends of every chunk, so the repeated
+    region is matched on its trimmed form; with no overlap found (a chunk that
+    started past the previous end) the chunks are joined by a newline."""
+    out = ""
+    for chunk in chunks:
+        if not out:
+            out = chunk
+            continue
+        tail = out.rstrip()
+        cut = None
+        for k in range(min(len(chunk), _JOIN_MAX_OVERLAP), _JOIN_MIN_OVERLAP - 1, -1):
+            head = chunk[:k].rstrip()
+            if len(head) >= _JOIN_MIN_OVERLAP and tail.endswith(head):
+                cut = len(head)
+                break
+        out = tail + chunk[cut:] if cut is not None else tail + "\n" + chunk
     return out
 
 
