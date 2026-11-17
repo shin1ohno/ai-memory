@@ -48,6 +48,9 @@ Environment="CLIENT_POLICY=memory-keeper=;monitoring-prober=;memory-mirror=inges
 ExecStart=/opt/es-memory/venv/bin/uvicorn server:app --host 127.0.0.1 --port 8010 --workers 1 --no-access-log
 Restart=on-failure
 RestartSec=5
+MemoryMax=1024M
+LimitNOFILE=65536
+TasksMax=256
 # Namespace hardening (NoNewPrivileges/ProtectSystem/ProtectHome/PrivateTmp)
 # intentionally omitted: they fail with status=226/NAMESPACE inside privileged
 # PVE LXCs (see node-exporter.service + ~/.claude/docs/pve-lxc-detail.md). The MCP
