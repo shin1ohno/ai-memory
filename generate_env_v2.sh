@@ -50,8 +50,8 @@ ELASTIC_PASSWORD=$(fetch_ssm "/monitoring/elastic/elastic-password")
 # EncryptionContext) — no IAM change needed.
 VOYAGE_API_KEY=$(fetch_ssm "/memory/voyage-api-key")
 
-# First matching rule wins; no match = deny. memory-mirror and the work account
-# (work@example.com, also in the proxy's ALLOWED_SUBS) deliberately get no rule.
+# First matching rule wins; no match = deny. memory-mirror and any extra account
+# allowed through SSM /memory/proxy-allowed-subs deliberately get no rule.
 SESSION_SCOPE_POLICY='{"rules":[{"match":{"grant":"client_credentials","client_id":"session-search-pro-dev"},"host":"pro-dev","scopes":["sessions:ingest","sessions:read"]},{"match":{"grant":"client_credentials","client_id":"session-search-mini"},"host":"mini","scopes":["sessions:ingest","sessions:read"]},{"match":{"grant":"client_credentials","client_id":"session-search-neo"},"host":"neo","scopes":["sessions:ingest","sessions:read"]},{"match":{"grant":"authorization_code","sub":"shin1ohno@gmail.com"},"host":null,"scopes":["sessions:read","sessions:purge"]}]}'
 
 fetch_archive() {

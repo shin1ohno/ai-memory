@@ -29,7 +29,12 @@ Environment=MEMORY_AUDIENCES=https://mcp.ohno.be/memory,memory
 # Hydra subject (userinfo.email), gated by SSM /hydra/allowed-emails — NOT the
 # Anthropic-account (Apple relay) address. A mismatch here 403s every claude.ai
 # request once /memory/ is served by this proxy (enforcement is inert on v1).
-Environment=ALLOWED_SUBS=shin1ohno@gmail.com,work@example.com
+# Only the operator is tracked here. Further subjects come from the SSM parameter
+# /memory/proxy-allowed-subs: setup's lxc-es-memory cookbook writes them, with the
+# operator, to /opt/es-memory/proxy-allowed-subs.env, and a drop-in
+# (memory-v2-proxy.service.d/allowed-subs.conf) adds that file as an
+# EnvironmentFile, which overrides this line. Without the file, this line applies.
+Environment=ALLOWED_SUBS=shin1ohno@gmail.com
 # Which client_credentials clients may reach the server at all; what each may do
 # there is memory-mcp-v2.service's CLIENT_POLICY, which must list the same ids.
 # session-search-<host>: the per-host ccs clients (bin/register-session-search);
