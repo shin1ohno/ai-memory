@@ -5,11 +5,12 @@ Validates OIDC (Ory Hydra) OAuth tokens (RS256 via JWKS) and proxies authenticat
 requests to the upstream openmemory-api service.
 """
 
+import asyncio
 import json
 import logging
 import os
 import time
-from urllib.request import urlopen
+import tempfile
 
 import jwt
 import jwt.algorithms
@@ -121,7 +122,7 @@ async def read_body_bounded(request, limit: int) -> bytes:
 
 
 class TokenVerifier:
-    """Verifies RS256 JWTs using a remote JWKS endpoint."""
+    """RS256 verification with one cancellable refresh shared by all callers."""
 
     def __init__(self, jwks_url: str, issuer: str, cache_ttl: int = 300):
         self._jwks_url = jwks_url
@@ -129,74 +130,162 @@ class TokenVerifier:
         self._cache_ttl = cache_ttl
         self._keys: dict = {}
         self._fetched_at: float = 0
+        self._retry_after = 0.0
+        self._force_after = 0.0
+        self._fetch_task = None
+        self._fetch_counts = {"success": 0, "failure": 0}
+        self._fetch_sums = {"success": 0.0, "failure": 0.0}
+        self._buckets = (0.01, 0.05, 0.1, 0.5, 1, 5, 10, float("inf"))
+        self._fetch_buckets = {key: [0] * len(self._buckets) for key in self._fetch_counts}
 
-    def _fetch_keys(self) -> None:
+    def _record_fetch(self, elapsed, outcome):
+        self._fetch_counts[outcome] += 1
+        self._fetch_sums[outcome] += elapsed
+        for i, bound in enumerate(self._buckets):
+            self._fetch_buckets[outcome][i] += elapsed <= bound
+        path = os.environ.get("MEMORY_PROXY_JWKS_METRICS_FILE",
+                              "/var/lib/node_exporter/textfile/memory_proxy_jwks.prom")
+        if not path:
+            return
+        lines = ["# TYPE memory_proxy_jwks_fetch_seconds histogram"]
+        for result in self._fetch_counts:
+            for bound, count in zip(self._buckets, self._fetch_buckets[result]):
+                label = "+Inf" if bound == float("inf") else str(bound)
+                lines.append(f'memory_proxy_jwks_fetch_seconds_bucket{{outcome="{result}",le="{label}"}} {count}')
+            lines.append(f'memory_proxy_jwks_fetch_seconds_count{{outcome="{result}"}} {self._fetch_counts[result]}')
+            lines.append(f'memory_proxy_jwks_fetch_seconds_sum{{outcome="{result}"}} {self._fetch_sums[result]}')
+        lines.extend(["# TYPE memory_proxy_jwks_fetch_failures_total counter",
+                      f'memory_proxy_jwks_fetch_failures_total {self._fetch_counts["failure"]}'])
+        temporary = None
         try:
-            with urlopen(self._jwks_url, timeout=10) as resp:
-                data = json.loads(resp.read())
-            self._keys = {}
-            for jwk_data in data.get("keys", []):
-                kid = jwk_data.get("kid", "default")
-                self._keys[kid] = jwt.algorithms.RSAAlgorithm.from_jwk(
-                    json.dumps(jwk_data)
-                )
-            self._fetched_at = time.monotonic()
-            logger.info("Fetched %d key(s) from JWKS", len(self._keys))
-        except Exception:
-            logger.exception("Failed to fetch JWKS from %s", self._jwks_url)
+            with tempfile.NamedTemporaryFile(mode="w", dir=os.path.dirname(path) or ".",
+                                             prefix=".jwks-", delete=False) as output:
+                temporary = output.name
+                output.write("\n".join(lines) + "\n")
+                os.fchmod(output.fileno(), 0o644)
+            os.replace(temporary, path)
+        except Exception as exc:
+            logger.warning("JWKS metric write failed: %s", type(exc).__name__)
+        finally:
+            if temporary:
+                try:
+                    os.unlink(temporary)
+                except FileNotFoundError:
+                    pass
+                except Exception as exc:
+                    logger.warning("JWKS metric cleanup failed: %s", type(exc).__name__)
 
-    def _ensure_keys(self, force: bool = False) -> None:
-        expired = time.monotonic() - self._fetched_at > self._cache_ttl
-        if force or not self._keys or expired:
-            self._fetch_keys()
+    async def _fetch_keys(self) -> None:
+        started = time.monotonic()
+        outcome = "failure"
+        try:
+            async with ClientSession(timeout=ClientTimeout(total=10)) as session:
+                async with session.get(self._jwks_url, allow_redirects=False) as response:
+                    if response.status != 200:
+                        raise ValueError(f"JWKS status {response.status}")
+                    data = await response.json(content_type=None)
+            if not isinstance(data, dict) or not isinstance(data.get("keys"), list):
+                raise ValueError("Not a JWKS document")
+            keys = {}
+            skipped = 0
+            for entry in data["keys"]:
+                try:
+                    if not isinstance(entry, dict) or entry.get("kty") != "RSA":
+                        raise ValueError("Not an RSA key")
+                    kid = entry.get("kid", "default")
+                    if not isinstance(kid, str):
+                        raise ValueError("Invalid key ID")
+                    keys[kid] = jwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(entry))
+                except Exception:
+                    skipped += 1
+            # A successful JWKS document is authoritative, including an empty
+            # result. Keep old keys only when fetching the document fails.
+            logger.info("JWKS entries skipped: %d", skipped)
+            self._keys = keys
+            self._fetched_at = time.monotonic()
+            # An authoritative empty set rejects tokens, but checks for issuer
+            # recovery every 30 seconds rather than waiting the normal key TTL.
+            self._retry_after = 0.0 if keys else self._fetched_at + 30
+            outcome = "success"
+            logger.info("Fetched %d key(s) from JWKS", len(keys))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._retry_after = time.monotonic() + 30
+            logger.warning("JWKS fetch rejected: %s", type(exc).__name__)
+        finally:
+            try:
+                await asyncio.to_thread(self._record_fetch, time.monotonic() - started, outcome)
+            except Exception as exc:
+                logger.warning("JWKS metric failed: %s", type(exc).__name__)
+
+    async def _ensure_keys(self, force=False) -> None:
+        now = time.monotonic()
+        if not force and self._keys and now - self._fetched_at <= self._cache_ttl:
+            return
+        if self._fetch_task is not None and not self._fetch_task.done():
+            # Cached keys remain usable during both forced and TTL refreshes.
+            if self._keys and not force:
+                return
+            await asyncio.shield(self._fetch_task)
+            return
+        if now < self._retry_after or (force and now < self._force_after):
+            return
+        self._fetch_task = asyncio.create_task(self._fetch_keys())
+        if self._keys and not force:
+            # Stale-while-revalidate: a slow issuer cannot stall valid tokens.
+            # Once the fetch completes, its authoritative set replaces these keys.
+            return
+        # Cancellation of one HTTP request must not cancel a refresh needed
+        # by other requests. The application owns shutdown of this task.
+        await asyncio.shield(self._fetch_task)
+
+    async def close(self):
+        if self._fetch_task is not None:
+            if not self._fetch_task.done():
+                self._fetch_task.cancel()
+            await asyncio.gather(self._fetch_task, return_exceptions=True)
 
     def _pick_key(self, token: str):
-        """Select the signing key for the token (by kid or first available)."""
         if not self._keys:
             return None
         try:
-            header = jwt.get_unverified_header(token)
-            kid = header.get("kid")
+            kid = jwt.get_unverified_header(token).get("kid")
             if kid and kid in self._keys:
                 return self._keys[kid]
         except Exception:
             pass
         return next(iter(self._keys.values()))
 
-    def verify(self, token: str) -> dict | None:
-        """Verify a JWT token. Retries with fresh JWKS on signature failure."""
-        self._ensure_keys()
+    def _decode(self, token, key):
+        return jwt.decode(token, key, algorithms=["RS256"], issuer=self._issuer,
+                          options={"verify_aud": False})
+
+    async def verify(self, token: str) -> dict | None:
+        await self._ensure_keys()
         key = self._pick_key(token)
         if key is None:
+            logger.warning("Token verification rejected: no_key issuer=%s", self._issuer)
             return None
         try:
-            return jwt.decode(
-                token,
-                key,
-                algorithms=["RS256"],
-                issuer=self._issuer,
-                options={"verify_aud": False},
-            )
+            return self._decode(token, key)
         except jwt.InvalidSignatureError:
-            self._ensure_keys(force=True)
+            await self._ensure_keys(force=True)
             key = self._pick_key(token)
-            if key is None:
-                return None
             try:
-                return jwt.decode(
-                    token,
-                    key,
-                    algorithms=["RS256"],
-                    issuer=self._issuer,
-                    options={"verify_aud": False},
-                )
+                return self._decode(token, key)
             except Exception as exc:
-                logger.warning("Token verify failed after JWKS refresh: %s", exc)
+                # Cache a still-invalid signature, not a successful rotation.
+                # Repeated bad requests do not extend the negative-cache window.
+                if isinstance(exc, jwt.InvalidSignatureError) and time.monotonic() >= self._force_after:
+                    self._force_after = time.monotonic() + 30
+                logger.warning("Token verification rejected after refresh: %s issuer=%s",
+                               type(exc).__name__, self._issuer)
                 return None
         except Exception as exc:
-            logger.warning("Token verification failed: %s", exc)
+            logger.warning("Token verification rejected: %s issuer=%s",
+                           type(exc).__name__, self._issuer)
             return None
-
 
 verifier = TokenVerifier(OIDC_JWKS_URL, OIDC_ISSUER)
 
@@ -298,7 +387,7 @@ async def handle(request: web.Request) -> web.StreamResponse:
             add_cors({"WWW-Authenticate": WWW_AUTH}),
         )
 
-    claims = verifier.verify(auth[7:])
+    claims = await verifier.verify(auth[7:])
     if claims is None:
         logger.warning("Invalid token for %s %s", request.method, request.path)
         return jsonrpc_error(
@@ -456,6 +545,7 @@ async def on_startup(app: web.Application) -> None:
 
 
 async def on_cleanup(app: web.Application) -> None:
+    await verifier.close()
     await app["http_client"].close()
 
 
@@ -465,4 +555,4 @@ app.on_cleanup.append(on_cleanup)
 app.router.add_route("*", "/{path_info:.*}", handle)
 
 if __name__ == "__main__":
-    web.run_app(app, host="0.0.0.0", port=PORT)
+    web.run_app(app, host="0.0.0.0", port=PORT, access_log=None)
