@@ -24,6 +24,9 @@ from contextlib import asynccontextmanager
 from mcp.server.fastmcp import Context
 from starlette.applications import Starlette
 from starlette.routing import Mount
+from starlette.middleware import Middleware
+
+from timing import mcp_metrics, RequestMetrics
 
 import es_backend as be
 import identity
@@ -138,6 +141,7 @@ def _auto_route(content: str) -> str:
 # Tools (contract §5)
 # --------------------------------------------------------------------------- #
 @mcp.tool(annotations=_ann(readOnlyHint=True), **_always_load())
+@mcp_metrics.tool("recall")
 async def recall(query: str, type: str | None = None, top_k: int = 10,
                  filters: dict | None = None, include_auto: bool = True,
                  ctx: Context = None) -> dict:
@@ -172,6 +176,7 @@ async def recall(query: str, type: str | None = None, top_k: int = 10,
 
 
 @mcp.tool()
+@mcp_metrics.tool("remember")
 async def remember(content: str, type: str = "auto", tags: list | None = None,
                    ctx: Context = None) -> dict:
     """Persist a memory. type='fact' (atomic durable fact — MUST be explicit),
@@ -243,6 +248,7 @@ async def remember(content: str, type: str = "auto", tags: list | None = None,
 
 
 @mcp.tool(annotations=_ann(idempotentHint=True))
+@mcp_metrics.tool("ingest")
 async def ingest(document: str, dataset: str, doc_key: str | None = None,
                  tags: list | None = None, ctx: Context = None) -> dict:
     """Ingest a document into the knowledge store with upsert semantics: re-ingest
@@ -261,6 +267,7 @@ async def ingest(document: str, dataset: str, doc_key: str | None = None,
 
 
 @mcp.tool(annotations=_ann(destructiveHint=True))
+@mcp_metrics.tool("revise")
 async def revise(id: str, content: str, ctx: Context = None) -> dict:
     """Replace a memory's content (supersede old + write new). A knowledge chunk
     id resolves to its whole parent document."""
@@ -277,6 +284,7 @@ async def revise(id: str, content: str, ctx: Context = None) -> dict:
 
 
 @mcp.tool(annotations=_ann(destructiveHint=True))
+@mcp_metrics.tool("forget")
 async def forget(id: str | None = None, dataset: str | None = None,
                  doc_key: str | None = None, ctx: Context = None) -> dict:
     """Logically delete a memory by id, or a knowledge document by (dataset,
@@ -294,6 +302,7 @@ async def forget(id: str | None = None, dataset: str | None = None,
 
 
 @mcp.tool(annotations=_ann(readOnlyHint=True))
+@mcp_metrics.tool("get")
 async def get(id: str, include_chain: bool = False, ctx: Context = None) -> dict:
     """Fetch a memory's full content + provenance by id (no use_count side
     effect). A document id (a recall hit's `doc_id`, or what remember returned)
@@ -303,6 +312,7 @@ async def get(id: str, include_chain: bool = False, ctx: Context = None) -> dict
 
 
 @mcp.tool(annotations=_ann(readOnlyHint=True))
+@mcp_metrics.tool("browse")
 async def browse(type: str | None = None, filters: dict | None = None,
                  sort: str = "written_at:desc", limit: int = 50,
                  ctx: Context = None) -> dict:
@@ -326,6 +336,7 @@ async def browse(type: str | None = None, filters: dict | None = None,
 
 
 @mcp.tool(annotations=_ann(readOnlyHint=True))
+@mcp_metrics.tool("memory_stats")
 async def memory_stats(ctx: Context = None) -> dict:
     """Per-type counts, raw-fact backlog (keeper-health signal), latest keeper
     stats docs, and in-flight ingest jobs."""
@@ -356,7 +367,14 @@ async def lifespan(_app):
     if sessions_app is not None:
         sessions_app.start_background()
     async with mcp.session_manager.run():
-        yield
+        observer = asyncio.create_task(mcp_metrics.monitor(
+            lambda: len(mcp.session_manager._server_instances)))
+        try:
+            yield
+        finally:
+            observer.cancel()
+            await asyncio.gather(observer, return_exceptions=True)
+            await asyncio.to_thread(mcp_metrics.flush)
 
 
 # /memory/sessions/v1 is mounted AHEAD of /memory: Starlette matches routes in
@@ -369,4 +387,5 @@ _routes.append(Mount("/memory", app=mcp.streamable_http_app()))
 app = Starlette(
     routes=_routes,
     lifespan=lifespan,
+    middleware=[Middleware(RequestMetrics)],
 )

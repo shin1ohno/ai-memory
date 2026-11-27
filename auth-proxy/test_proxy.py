@@ -34,6 +34,7 @@ os.environ.setdefault("OTEL_TRACES_EXPORTER", "none")
 from aiohttp import web  # noqa: E402
 from aiohttp.test_utils import TestClient, TestServer  # noqa: E402
 
+os.environ.setdefault("MEMORY_PROXY_METRICS_FILE", "")
 import proxy  # noqa: E402
 
 MIB = 1024 * 1024

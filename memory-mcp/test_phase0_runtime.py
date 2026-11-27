@@ -15,6 +15,7 @@ os.environ['ES_URL'] = 'http://127.0.0.1:9'
 os.environ['ES_PASSWORD'] = 'test-placeholder'
 os.environ['VOYAGE_API_KEY'] = 'test-placeholder'
 
+os.environ.setdefault("MEMORY_MCP_METRICS_FILE", "")
 import es_backend as be
 
 
