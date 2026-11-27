@@ -18,6 +18,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 import jwt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+os.environ['MEMORY_PROXY_METRICS_FILE'] = ''
 import proxy
 
 KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -388,7 +389,7 @@ class EntryPoint(unittest.IsolatedAsyncioTestCase):
         with socket.socket() as s:
             s.bind(('127.0.0.1', 0))
             port = s.getsockname()[1]
-        env = {'PATH': os.defpath, 'PORT': str(port), 'MEMORY_PROXY_JWKS_METRICS_FILE': ''}
+        env = {'PATH': os.defpath, 'PORT': str(port), 'MEMORY_PROXY_JWKS_METRICS_FILE': '', 'MEMORY_PROXY_METRICS_FILE': ''}
         process = await asyncio.create_subprocess_exec(
             sys.executable, '-u', str(Path(proxy.__file__)), env=env,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)

@@ -11,6 +11,16 @@ import logging
 import os
 import time
 import tempfile
+from pathlib import Path
+import sys
+
+# The source tree separates the proxy; the deployed artifact is one directory.
+_sibling = Path(__file__).resolve().parent.parent / "memory-mcp"
+if (_sibling / "timing.py").is_file():
+    sys.path.insert(0, str(_sibling))
+from timing import Metrics
+
+proxy_metrics = Metrics("proxy")
 
 import jwt
 import jwt.algorithms
@@ -444,6 +454,8 @@ async def handle(request: web.Request) -> web.StreamResponse:
                     JSONRPC_FORBIDDEN, "forbidden_subject", 403, add_cors({})
                 )
 
+    request["metric_client"] = proxy_metrics.client(client_id, verified=True)
+
     # ── Proxy to upstream ──
     url = f"{UPSTREAM_URL}{request.path_qs}"
     # Strip any inbound X-Verified-* headers (spoof defense) before injecting our
@@ -483,6 +495,16 @@ async def handle(request: web.Request) -> web.StreamResponse:
         # The body is forwarded as bytes, so the client's Content-Length (absent
         # on a chunked request) must not travel with it; aiohttp sets its own.
         fwd_headers = {k: v for k, v in fwd_headers.items() if k.lower() != "content-length"}
+
+    if request.path.rstrip("/") == "/mcp" and body and len(body) <= 65536:
+        try:
+            metadata = json.loads(body)
+            if isinstance(metadata, dict) and metadata.get("method") == "initialize":
+                params = metadata.get("params", {})
+                if isinstance(params, dict):
+                    request["metric_version"] = proxy_metrics.version(params.get("protocolVersion"))
+        except (ValueError, UnicodeError, RecursionError):
+            pass
 
     try:
         upstream = await session.request(
@@ -539,17 +561,39 @@ async def handle(request: web.Request) -> web.StreamResponse:
 # ── App lifecycle ──────────────────────────────────────────────────────
 
 
+@web.middleware
+async def request_metrics(request, handler):
+    started = time.perf_counter()
+    status = 500
+    try:
+        response = await handler(request)
+        status = response.status
+        return response
+    finally:
+        tags = dict(client_id=request.get("metric_client", "other"),
+                    protocol_version=request.get("metric_version", proxy_metrics.version(
+                        request.headers.get("MCP-Protocol-Version"))), status=str(status))
+        proxy_metrics.count("requests_total", **tags)
+        proxy_metrics.observe("request_seconds", time.perf_counter() - started, **tags)
+
+
 async def on_startup(app: web.Application) -> None:
+    app["metric_task"] = asyncio.create_task(proxy_metrics.monitor())
     app["http_client"] = ClientSession()
     logger.info("Auth proxy started (prefix=%s, upstream=%s)", PATH_PREFIX, UPSTREAM_URL)
 
 
 async def on_cleanup(app: web.Application) -> None:
+    task = app.get("metric_task")
+    if task is not None:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    await asyncio.to_thread(proxy_metrics.flush)
     await verifier.close()
     await app["http_client"].close()
 
 
-app = web.Application()
+app = web.Application(middlewares=[request_metrics])
 app.on_startup.append(on_startup)
 app.on_cleanup.append(on_cleanup)
 app.router.add_route("*", "/{path_info:.*}", handle)

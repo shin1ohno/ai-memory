@@ -26,6 +26,7 @@ import httpx
 
 import scoring
 import voyage
+from timing import mcp_metrics
 from identity import (POLICY_DENIED_MESSAGE, AuthzError, audit_policy_deny,
                       audit_supersede, authorize_supersede)
 
@@ -533,7 +534,7 @@ async def recall(query: str, memory_type: str | None = None, top_k: int = 10,
 
     async def embedding():
         try:
-            return await voyage.embed_query(query)
+            return await mcp_metrics.measure("embed", voyage.embed_query(query))
         except voyage.VoyageUnavailable:
             return None
 
@@ -544,7 +545,8 @@ async def recall(query: str, memory_type: str | None = None, top_k: int = 10,
     # Cancel and drain the other leg on failure or disconnect, so no work
     # outlives the request. Only embedding unavailability degrades to BM25.
     embed_task = asyncio.create_task(embedding())
-    bm25_task = asyncio.create_task(_es_json("POST", f"/{index}/_search", bm25_body))
+    bm25_task = asyncio.create_task(mcp_metrics.measure(
+        "bm25", _es_json("POST", f"/{index}/_search", bm25_body)))
     try:
         qvec, bm25_result = await asyncio.gather(embed_task, bm25_task)
     finally:
@@ -568,10 +570,12 @@ async def recall(query: str, memory_type: str | None = None, top_k: int = 10,
                 "filter": flt,
             },
         }
-        knn_hits = (await _es_json("POST", f"/{index}/_search", knn_body))["hits"]["hits"]
+        knn_hits = (await mcp_metrics.measure(
+            "knn", _es_json("POST", f"/{index}/_search", knn_body)))["hits"]["hits"]
         legs.append(knn_hits)
 
-    rrf = scoring.rrf_fuse(legs, k=RRF_K)
+    with mcp_metrics.phase("rrf"):
+        rrf = scoring.rrf_fuse(legs, k=RRF_K)
     sources: dict[str, dict] = {}
     for leg in legs:
         for h in leg:
@@ -665,7 +669,7 @@ async def remember_fact(content: str, tags: list | None, provenance: dict) -> di
             out["tags_added"] = missing
         return out
 
-    vec = (await voyage.embed_documents([content]))[0]
+    vec = (await mcp_metrics.measure("embed", voyage.embed_documents([content])))[0]
     prov = dict(provenance or {})
     prov.setdefault("written_at", _now_iso())
     doc = {
@@ -763,7 +767,7 @@ async def _ingest_chunks(chunks: list[str], dataset: str, doc_key: str,
     # re-ingest path agree with it.
     if tags is None:
         tags = await _prior_doc_tags(dataset, doc_key)
-    vecs = await voyage.embed_documents(chunks)
+    vecs = await mcp_metrics.measure("embed", voyage.embed_documents(chunks))
     prov = dict(provenance or {})
     prov.setdefault("written_at", _now_iso())
     docs = []
@@ -826,7 +830,7 @@ async def _ingest_job(job_id: str, chunks, dataset, doc_key, new_doc_id, provena
 # append_episode (contract §4)
 # --------------------------------------------------------------------------- #
 async def append_episode(content: str, tags: list | None, provenance: dict) -> dict:
-    vec = (await voyage.embed_documents([content]))[0]
+    vec = (await mcp_metrics.measure("embed", voyage.embed_documents([content])))[0]
     now = datetime.now(timezone.utc)
     prov = dict(provenance or {})
     prov.setdefault("written_at", _iso(now))
@@ -1022,7 +1026,7 @@ async def revise(id: str, content: str, provenance: dict, grant: str, agent: str
         return {"new_id": new_doc_id}
 
     # fact / episode: supersede single + write new
-    vec = (await voyage.embed_documents([content]))[0]
+    vec = (await mcp_metrics.measure("embed", voyage.embed_documents([content])))[0]
     memory_type = src.get("memory_type", "fact")
     new_doc = {
         "content": content,
