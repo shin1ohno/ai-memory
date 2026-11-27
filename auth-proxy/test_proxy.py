@@ -56,7 +56,9 @@ class ProxyTest(unittest.TestCase):
         self.seen: list = []
         self.cap = Capture()
         proxy.logger.addHandler(self.cap)
-        proxy.verifier.verify = lambda token: dict(CLAIMS) if token == "stub" else None
+        async def verify(token):
+            return dict(CLAIMS) if token == "stub" else None
+        proxy.verifier.verify = verify
 
     def tearDown(self):
         proxy.logger.removeHandler(self.cap)
