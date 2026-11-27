@@ -47,6 +47,9 @@ EnvironmentFile=-/opt/es-memory/proxy-secret.env
 ExecStart=/opt/es-memory/venv/bin/python proxy.py
 Restart=on-failure
 RestartSec=5
+MemoryMax=256M
+LimitNOFILE=65536
+TasksMax=256
 
 [Install]
 WantedBy=multi-user.target
