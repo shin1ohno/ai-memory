@@ -1,6 +1,6 @@
 # C-SES-4: Redaction ruleset r1
 
-Plan section 2.2. Python reference: `612b1cb`. Round-trip coverage: **not covered by run.py**.
+Plan section 2.2. Python reference: `612b1cb`. Round-trip coverage: **outside run.py (accepted 2026-11-28)**.
 
 ## Contract
 
@@ -18,7 +18,11 @@ module, ccs's copy, Rust) must produce each vector's output byte for byte.
 
 ## Test
 
-Not in run.py: the vectors are consumed by each language's own conformance test (memory-mcp/test_session_redact_conformance.py for Python).
+Outside run.py, by owner decision on 2026-11-28. Alternative verification: each implementation's own
+conformance test consumes `memory-mcp/conformance/session_redact_r1.jsonl` and must reproduce every
+vector byte for byte — `memory-mcp/test_session_redact_conformance.py` for Python (run by `make test`),
+session-search's vendored copy of the same test for ccs, and the Rust crate's equivalent once it exists.
+The HTTP path does not add coverage here: ingest re-runs the same detector the vectors pin.
 
 ## Notes
 

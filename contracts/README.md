@@ -13,9 +13,11 @@ These specs are drafts for the W1 freeze. The freeze itself waits for the Phase 
 (M5) and the claude.ai connector observation (M6); either can still add to C-MCP-2. Until then the files
 may change in ordinary pull requests.
 
-Coverage by `tests/http_roundtrip/run.py` against the Python implementation: 36 covered,
-8 partial, 6 not covered by the suite (50 IDs). "Partial" and "not
-covered" are explained in each spec's Notes or Test section.
+Coverage by `tests/http_roundtrip/run.py` against the Python implementation: 39 covered,
+8 partial, 3 outside run.py (50 IDs). "Partial" is explained in each spec's Notes. The 3 outside run.py
+were accepted by the owner on 2026-11-28, each with an alternative verification written in its spec's
+Test section: C-SES-4 (the per-language conformance test on the frozen vectors), C-HOOK-4 and C-OPS-4
+(run in production at each cutover).
 
 ## Machine-readable artifacts
 
@@ -24,6 +26,7 @@ covered" are explained in each spec's Notes or Test section.
 | `mcp-tools.json` | C-MCP-1: the `tools/list` result | `run.py --capture` |
 | `constants.json` | C-HOOK-3: values shared by the hook and the server | `run.py --capture` |
 | `golden/<ID>/*.json` | recorded responses and requests, normalised | `run.py --capture` |
+| `../tests/http_roundtrip/ccs_pin.json` | C-SES-5: the ccs commit the round trip runs | by hand |
 | `../memory-mcp/conformance/session_redact_r1.jsonl` | C-SES-4: redaction vectors | `memory-mcp/conformance/gen_vectors.py` |
 
 Golden normalisation (`tests/http_roundtrip/lib.py`, `Normalizer`): ids, uuids and session ids become
@@ -67,12 +70,12 @@ are normalised the same way.
 | [C-SES-1](specs/C-SES-1.md) | Session routes and scopes | covered |
 | [C-SES-2](specs/C-SES-2.md) | Session gate | covered |
 | [C-SES-3](specs/C-SES-3.md) | Session limits | partial |
-| [C-SES-4](specs/C-SES-4.md) | Redaction ruleset r1 | not covered by run.py |
-| [C-SES-5](specs/C-SES-5.md) | ccs client round trip | not covered by run.py |
+| [C-SES-4](specs/C-SES-4.md) | Redaction ruleset r1 | outside run.py (conformance test) |
+| [C-SES-5](specs/C-SES-5.md) | ccs client round trip | covered |
 | [C-SES-6](specs/C-SES-6.md) | Ingest protocol | partial |
 | [C-SES-7](specs/C-SES-7.md) | SESSION_SCOPE_POLICY | covered |
-| [C-SES-8](specs/C-SES-8.md) | Archive objects | not covered by run.py |
-| [C-SES-9](specs/C-SES-9.md) | Purge ordering | not covered by run.py |
+| [C-SES-8](specs/C-SES-8.md) | Archive objects | covered |
+| [C-SES-9](specs/C-SES-9.md) | Purge ordering | covered |
 
 ### 2.3 JWT verification
 
@@ -102,7 +105,7 @@ are normalised the same way.
 | [C-HOOK-1](specs/C-HOOK-1.md) | Mirror token | covered |
 | [C-HOOK-2](specs/C-HOOK-2.md) | Mirror ingest and forget | covered |
 | [C-HOOK-3](specs/C-HOOK-3.md) | Shared constants | covered |
-| [C-HOOK-4](specs/C-HOOK-4.md) | Production --check | not covered by run.py |
+| [C-HOOK-4](specs/C-HOOK-4.md) | Production --check | outside run.py (at cutover) |
 
 ### 2.6 Operations
 
@@ -111,7 +114,7 @@ are normalised the same way.
 | [C-OPS-1](specs/C-OPS-1.md) | Units, ports and names | partial |
 | [C-OPS-2](specs/C-OPS-2.md) | Environment variables | partial |
 | [C-OPS-3](specs/C-OPS-3.md) | Audit lines | covered |
-| [C-OPS-4](specs/C-OPS-4.md) | External probe path | not covered by run.py |
+| [C-OPS-4](specs/C-OPS-4.md) | External probe path | outside run.py (at cutover) |
 
 ### 2.7 Scheduled work and external APIs
 
