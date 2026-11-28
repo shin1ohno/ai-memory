@@ -1,0 +1,30 @@
+{
+  "bad_filter": {
+    "isError": true,
+    "text": "Error executing tool recall: unknown filter key 'no_such_key'. Filterable keys: chunk_index, content_hash, dataset, derived_from, doc_key, entities, memory_type, parent_id, promoted_to, provenance.agent, provenance.session_id, provenance.source_class, reconcile_status, superseded_by, tags, use_count"
+  },
+  "browse_limit": {
+    "isError": true,
+    "text": "Error executing tool browse: limit must be an int in 1..1000, got 5000"
+  },
+  "date_filter": {
+    "isError": true,
+    "text": "Error executing tool browse: unknown filter key 'written_at'. Filterable keys: chunk_index, content_hash, dataset, derived_from, doc_key, entities, memory_type, parent_id, promoted_to, provenance.agent, provenance.session_id, provenance.source_class, reconcile_status, superseded_by, tags, use_count"
+  },
+  "get_missing": {
+    "isError": true,
+    "text": "Error executing tool get: id missing-id not found"
+  },
+  "policy_denied_recall": {
+    "isError": true,
+    "text": "policy_denied: this client is not permitted to make this call"
+  },
+  "revise_missing": {
+    "isError": true,
+    "text": "Error executing tool revise: id missing-id not found"
+  },
+  "unknown_tool": {
+    "isError": true,
+    "text": "Unknown tool: no_such_tool"
+  }
+}

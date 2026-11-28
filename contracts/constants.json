@@ -1,0 +1,8 @@
+{
+  "dataset_scoped_tools": [
+    "forget",
+    "ingest"
+  ],
+  "policy_denied_prefix": "policy_denied:",
+  "restricted_ingest_max_chars": 45000
+}

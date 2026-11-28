@@ -1,0 +1,73 @@
+[
+  {
+    "body": {
+      "query": {
+        "ids": {
+          "values": [
+            "es00001",
+            "es00002",
+            "es00004"
+          ]
+        }
+      },
+      "script": {
+        "lang": "painless",
+        "params": {
+          "now": "<ts>"
+        },
+        "source": "if (ctx._source.use_count == null) { ctx._source.use_count = 1 } else { ctx._source.use_count += 1 } ctx._source.last_used_at = params.now;"
+      }
+    },
+    "method": "POST",
+    "path": "/memory-all/_update_by_query",
+    "query": {
+      "conflicts": "proceed"
+    }
+  },
+  {
+    "body": {
+      "query": {
+        "ids": {
+          "values": [
+            "es00001"
+          ]
+        }
+      },
+      "script": {
+        "lang": "painless",
+        "params": {
+          "now": "<ts>"
+        },
+        "source": "if (ctx._source.use_count == null) { ctx._source.use_count = 1 } else { ctx._source.use_count += 1 } ctx._source.last_used_at = params.now;"
+      }
+    },
+    "method": "POST",
+    "path": "/memory-all/_update_by_query",
+    "query": {
+      "conflicts": "proceed"
+    }
+  },
+  {
+    "body": {
+      "query": {
+        "ids": {
+          "values": [
+            "es00001"
+          ]
+        }
+      },
+      "script": {
+        "lang": "painless",
+        "params": {
+          "now": "<ts>"
+        },
+        "source": "if (ctx._source.use_count == null) { ctx._source.use_count = 1 } else { ctx._source.use_count += 1 } ctx._source.last_used_at = params.now;"
+      }
+    },
+    "method": "POST",
+    "path": "/memory-all/_update_by_query",
+    "query": {
+      "conflicts": "proceed"
+    }
+  }
+]

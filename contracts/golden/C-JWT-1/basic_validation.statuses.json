@@ -1,0 +1,13 @@
+{
+  "alg-HS256": 401,
+  "alg-none": 401,
+  "aud-unrelated": 200,
+  "expired-1s": 401,
+  "iat-future": 401,
+  "inert-aud-unrelated": 200,
+  "missing-iss": 401,
+  "nbf-future": 401,
+  "tampered-signature": 401,
+  "valid": 200,
+  "wrong-issuer": 401
+}

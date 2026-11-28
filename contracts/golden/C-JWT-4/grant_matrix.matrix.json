@@ -1,0 +1,54 @@
+{
+  "authorization_code/empty-list": {
+    "status": 200,
+    "x_verified_grant": "authorization_code"
+  },
+  "authorization_code/list-memory": {
+    "status": 200,
+    "x_verified_grant": "authorization_code"
+  },
+  "authorization_code/list-url": {
+    "status": 200,
+    "x_verified_grant": "authorization_code"
+  },
+  "authorization_code/missing": {
+    "status": 200,
+    "x_verified_grant": "authorization_code"
+  },
+  "authorization_code/str-memory": {
+    "status": 200,
+    "x_verified_grant": "authorization_code"
+  },
+  "authorization_code/str-other": {
+    "status": 200,
+    "x_verified_grant": "authorization_code"
+  },
+  "client_credentials/empty-list": {
+    "status": 403,
+    "x_verified_grant": null
+  },
+  "client_credentials/list-memory": {
+    "status": 200,
+    "x_verified_grant": "client_credentials"
+  },
+  "client_credentials/list-url": {
+    "status": 200,
+    "x_verified_grant": "client_credentials"
+  },
+  "client_credentials/missing": {
+    "status": 403,
+    "x_verified_grant": null
+  },
+  "client_credentials/str-memory": {
+    "status": 200,
+    "x_verified_grant": "client_credentials"
+  },
+  "client_credentials/str-other": {
+    "status": 403,
+    "x_verified_grant": null
+  },
+  "no-client_id": {
+    "status": 200,
+    "x_verified_grant": "authorization_code"
+  }
+}

@@ -1,0 +1,123 @@
+{
+  "archive-unconfigured": [
+    503,
+    {
+      "error": "archive_unavailable"
+    }
+  ],
+  "bad-json-line": [
+    422,
+    {
+      "error": "invalid_line",
+      "kinds": [
+        "invalid-json"
+      ],
+      "lines": [
+        0
+      ]
+    }
+  ],
+  "bad-redact-version": [
+    400,
+    {
+      "error": "unsupported_redact_version"
+    }
+  ],
+  "first": [
+    200,
+    {
+      "archive": "skipped",
+      "indexed": 1,
+      "next_offset": 230,
+      "session_key": "sk_cl5ipwq6ren5qn6azv6mbwnlxtrqycq7"
+    }
+  ],
+  "gap": [
+    409,
+    {
+      "error": "offset_mismatch",
+      "expected_offset": 456
+    }
+  ],
+  "host-mismatch": [
+    403,
+    {
+      "error": "host_mismatch"
+    }
+  ],
+  "new-gen-nonzero": [
+    409,
+    {
+      "error": "offset_mismatch",
+      "expected_offset": 0
+    }
+  ],
+  "new-gen-zero": [
+    200,
+    {
+      "archive": "skipped",
+      "indexed": 1,
+      "next_offset": 230,
+      "session_key": "sk_cl5ipwq6ren5qn6azv6mbwnlxtrqycq7"
+    }
+  ],
+  "next": [
+    200,
+    {
+      "archive": "skipped",
+      "indexed": 1,
+      "next_offset": 456,
+      "session_key": "sk_cl5ipwq6ren5qn6azv6mbwnlxtrqycq7"
+    }
+  ],
+  "retry-first-again": [
+    200,
+    {
+      "archive": "skipped",
+      "indexed": 1,
+      "next_offset": 230,
+      "session_key": "sk_cl5ipwq6ren5qn6azv6mbwnlxtrqycq7"
+    }
+  ],
+  "retry-same": [
+    200,
+    {
+      "archive": "skipped",
+      "indexed": 1,
+      "next_offset": 230,
+      "session_key": "sk_cl5ipwq6ren5qn6azv6mbwnlxtrqycq7"
+    }
+  ],
+  "sha-mismatch": [
+    422,
+    {
+      "error": "sha256_mismatch"
+    }
+  ],
+  "stale-gen": [
+    409,
+    {
+      "error": "stale_generation",
+      "expected_offset": 0,
+      "generation": 1
+    }
+  ],
+  "subagent": [
+    200,
+    {
+      "archive": "skipped",
+      "indexed": 1,
+      "next_offset": 230,
+      "session_key": "sk_cl5ipwq6ren5qn6azv6mbwnlxtrqycq7"
+    }
+  ],
+  "subagent-own-cursor": [
+    200,
+    {
+      "archive": "skipped",
+      "indexed": 1,
+      "next_offset": 230,
+      "session_key": "sk_cl5ipwq6ren5qn6azv6mbwnlxtrqycq7"
+    }
+  ]
+}

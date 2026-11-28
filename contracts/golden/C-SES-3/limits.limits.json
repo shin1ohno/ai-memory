@@ -1,0 +1,18 @@
+{
+  "gzip-over-5MiB": [
+    413,
+    "too_large"
+  ],
+  "gzip-small": [
+    200,
+    null
+  ],
+  "lines-50001": [
+    413,
+    "too_many_lines"
+  ],
+  "wire-8MiB+1": [
+    413,
+    "too_large"
+  ]
+}

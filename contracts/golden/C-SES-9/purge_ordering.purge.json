@@ -1,0 +1,116 @@
+{
+  "after_clear": {
+    "doc": null,
+    "ingest": [
+      200,
+      "written"
+    ]
+  },
+  "clear": [
+    200,
+    {
+      "cleared": true
+    }
+  ],
+  "clear_again": [
+    404,
+    {
+      "error": "not_purged"
+    }
+  ],
+  "late_object": {
+    "messages_left": [],
+    "objects_left": [],
+    "purge": [
+      200,
+      {
+        "deleted_docs": 2,
+        "deleted_objects": 1
+      }
+    ],
+    "timeline": [
+      "es: session doc conditional write (purged form)",
+      "archive: list",
+      "archive: delete",
+      "es: delete messages by query",
+      "archive: delete"
+    ],
+    "writer": [
+      409,
+      "purged"
+    ]
+  },
+  "lost_conditional_write": {
+    "messages_left": [],
+    "objects_left": [],
+    "purge": [
+      200,
+      {
+        "deleted_docs": 2,
+        "deleted_objects": 2
+      }
+    ],
+    "timeline": [
+      "es: session doc conditional write (purged form)",
+      "archive: list",
+      "archive: list",
+      "archive: delete",
+      "archive: delete",
+      "es: delete messages by query",
+      "es: session doc conditional write",
+      "es: bulk delete messages",
+      "archive: delete"
+    ],
+    "writer": [
+      409,
+      "purged"
+    ]
+  },
+  "purge": [
+    200,
+    {
+      "deleted_docs": 2,
+      "deleted_objects": 2
+    }
+  ],
+  "purge_timeline": [
+    "es: session doc conditional write (purged form)",
+    "archive: list",
+    "archive: list",
+    "archive: delete",
+    "archive: delete",
+    "es: delete messages by query"
+  ],
+  "refusals": {
+    "archive": [
+      404,
+      "not_found"
+    ],
+    "blob": [
+      409,
+      "purged"
+    ],
+    "ingest (after restart)": [
+      409,
+      "purged"
+    ],
+    "ingest (other process)": [
+      409,
+      "purged"
+    ],
+    "ingest (purging process)": [
+      409,
+      "purged"
+    ],
+    "state": [
+      409,
+      "purged"
+    ]
+  },
+  "tombstone_keys": [
+    "host",
+    "purged_at",
+    "purged_by",
+    "session_key"
+  ]
+}

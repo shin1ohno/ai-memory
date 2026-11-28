@@ -1,0 +1,78 @@
+[
+  {
+    "case": "authz-code-any-tool",
+    "denied": false
+  },
+  {
+    "case": "authz-code-tags",
+    "denied": false
+  },
+  {
+    "case": "mirror-ingest-own-dataset",
+    "denied": false
+  },
+  {
+    "case": "mirror-ingest-other-dataset",
+    "denied": true
+  },
+  {
+    "case": "mirror-ingest-no-dataset",
+    "denied": true
+  },
+  {
+    "case": "mirror-ingest-tags",
+    "denied": true
+  },
+  {
+    "case": "mirror-ingest-45000",
+    "denied": false
+  },
+  {
+    "case": "mirror-ingest-45001",
+    "denied": true
+  },
+  {
+    "case": "mirror-ingest-doc-not-str",
+    "denied": true
+  },
+  {
+    "case": "mirror-ingest-dataset-list",
+    "denied": true
+  },
+  {
+    "case": "mirror-forget-own-dataset",
+    "denied": false
+  },
+  {
+    "case": "mirror-forget-other-dataset",
+    "denied": true
+  },
+  {
+    "case": "mirror-recall",
+    "denied": true
+  },
+  {
+    "case": "mirror-remember",
+    "denied": true
+  },
+  {
+    "case": "keeper-listed-no-tools",
+    "denied": true
+  },
+  {
+    "case": "unlisted-client",
+    "denied": true
+  },
+  {
+    "case": "writer-second-dataset",
+    "denied": false
+  },
+  {
+    "case": "missing-grant",
+    "denied": true
+  },
+  {
+    "case": "unknown-grant",
+    "denied": true
+  }
+]

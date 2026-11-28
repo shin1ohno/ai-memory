@@ -1,0 +1,80 @@
+{
+  "2024-11-05": {
+    "initialize_content_type": "text/event-stream",
+    "initialize_status": 200,
+    "initialized_status": 202,
+    "result": {
+      "capabilities": {
+        "experimental": {},
+        "prompts": {
+          "listChanged": false
+        },
+        "resources": {
+          "listChanged": false,
+          "subscribe": false
+        },
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "protocolVersion": "2024-11-05",
+      "serverInfo": {
+        "name": "memory"
+      }
+    },
+    "tools_list_status": 200,
+    "without_session_status": 400
+  },
+  "2025-06-18": {
+    "initialize_content_type": "text/event-stream",
+    "initialize_status": 200,
+    "initialized_status": 202,
+    "result": {
+      "capabilities": {
+        "experimental": {},
+        "prompts": {
+          "listChanged": false
+        },
+        "resources": {
+          "listChanged": false,
+          "subscribe": false
+        },
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "protocolVersion": "2025-06-18",
+      "serverInfo": {
+        "name": "memory"
+      }
+    },
+    "tools_list_status": 200,
+    "without_session_status": 400
+  },
+  "2025-11-25": {
+    "initialize_content_type": "text/event-stream",
+    "initialize_status": 200,
+    "initialized_status": 202,
+    "result": {
+      "capabilities": {
+        "experimental": {},
+        "prompts": {
+          "listChanged": false
+        },
+        "resources": {
+          "listChanged": false,
+          "subscribe": false
+        },
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "protocolVersion": "2025-11-25",
+      "serverInfo": {
+        "name": "memory"
+      }
+    },
+    "tools_list_status": 200,
+    "without_session_status": 400
+  }
+}

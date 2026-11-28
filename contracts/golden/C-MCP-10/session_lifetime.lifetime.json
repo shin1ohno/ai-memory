@@ -1,0 +1,21 @@
+{
+  "a_idle_expired": 404,
+  "after_delete": 404,
+  "b_after_close": 404,
+  "b_get_status_line": "HTTP/1.1 200 OK",
+  "b_with_get_open": [
+    200,
+    200,
+    200
+  ],
+  "c_after_slow_call": 200,
+  "c_slow_call_ok": true,
+  "d_periodic": [
+    200,
+    200,
+    200,
+    200
+  ],
+  "delete": 200,
+  "unknown_session": 404
+}

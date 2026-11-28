@@ -1,0 +1,114 @@
+{
+  "b-preview-a-session": [
+    200
+  ],
+  "b-state-on-a-session": [
+    403,
+    {
+      "error": "host_mismatch"
+    }
+  ],
+  "b-writes-a-body": [
+    403,
+    {
+      "error": "host_mismatch"
+    }
+  ],
+  "b-writes-own-body-same-session": [
+    200,
+    {
+      "archive": "skipped",
+      "indexed": 1,
+      "next_offset": 230,
+      "session_key": "sk_2zkbaemoskyhocr6mjljy2bmdfsuxrd3"
+    }
+  ],
+  "bad/bad-host": [
+    403,
+    "forbidden",
+    true
+  ],
+  "bad/duplicate-scope": [
+    403,
+    "forbidden",
+    true
+  ],
+  "bad/empty-match": [
+    403,
+    "forbidden",
+    true
+  ],
+  "bad/empty-match-value": [
+    403,
+    "forbidden",
+    true
+  ],
+  "bad/extra-top-key": [
+    403,
+    "forbidden",
+    true
+  ],
+  "bad/not-json": [
+    403,
+    "forbidden",
+    true
+  ],
+  "bad/rule-missing-key": [
+    403,
+    "forbidden",
+    true
+  ],
+  "bad/rules-not-list": [
+    403,
+    "forbidden",
+    true
+  ],
+  "bad/top-level-list": [
+    403,
+    "forbidden",
+    true
+  ],
+  "bad/unknown-grant": [
+    403,
+    "forbidden",
+    true
+  ],
+  "bad/unknown-match-key": [
+    403,
+    "forbidden",
+    true
+  ],
+  "bad/unknown-scope": [
+    403,
+    "forbidden",
+    true
+  ],
+  "first-match/a-ingest": [
+    403
+  ],
+  "first-match/other-ingest-allowed": [
+    200
+  ],
+  "hostless-ingest": [
+    403,
+    {
+      "error": "host_mismatch"
+    }
+  ],
+  "hostless-purge-any-host": [
+    200,
+    {
+      "deleted_docs": 1,
+      "deleted_objects": 0
+    }
+  ],
+  "operator-ingest-no-scope": [
+    403,
+    {
+      "error": "forbidden"
+    }
+  ],
+  "owner-ingest": [
+    200
+  ]
+}

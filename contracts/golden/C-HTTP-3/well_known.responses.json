@@ -1,0 +1,73 @@
+{
+  "dot-segment-escape": {
+    "body": {
+      "error": "not_found"
+    },
+    "status": 404
+  },
+  "encoded-dot-segment": {
+    "body": {
+      "error": "not_found"
+    },
+    "status": 404
+  },
+  "metadata": {
+    "body": {
+      "authorization_servers": [
+        "https://issuer.example.test"
+      ],
+      "bearer_methods_supported": [
+        "header"
+      ],
+      "resource": "https://issuer.example.test/memory",
+      "scopes_supported": [
+        "mcp:read",
+        "mcp:write",
+        "mcp:admin"
+      ]
+    },
+    "headers": [
+      [
+        "access-control-allow-headers",
+        "Content-Type, Authorization, Accept"
+      ],
+      [
+        "access-control-allow-methods",
+        "GET, POST, PUT, DELETE, OPTIONS"
+      ],
+      [
+        "access-control-allow-origin",
+        "*"
+      ],
+      [
+        "access-control-expose-headers",
+        "WWW-Authenticate"
+      ],
+      [
+        "access-control-max-age",
+        "86400"
+      ],
+      [
+        "cache-control",
+        "public, max-age=3600"
+      ],
+      [
+        "content-type",
+        "application/json; charset=utf-8"
+      ]
+    ],
+    "status": 200
+  },
+  "oauth-authorization-server": {
+    "body": {
+      "error": "not_found"
+    },
+    "status": 404
+  },
+  "openid-configuration": {
+    "body": {
+      "error": "not_found"
+    },
+    "status": 404
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "apm_service_name_default": "ai-memory-auth-proxy",
+  "metric_files": [
+    "memory_mcp.prom",
+    "memory_proxy.prom",
+    "memory_proxy_jwks.prom"
+  ],
+  "units": {
+    "memory-mcp-v2.service": {
+      "exec_start": [
+        "/opt/es-memory/venv/bin/uvicorn server:app --host 127.0.0.1 --port 8010 --workers 1 --no-access-log"
+      ],
+      "port_env": [],
+      "working_directory": [
+        "/opt/es-memory/app-v2"
+      ]
+    },
+    "memory-session-maint.service": {
+      "exec_start": [
+        "/opt/es-memory/venv/bin/python /opt/es-memory/app-v2/sessions_maint.py run"
+      ],
+      "port_env": [],
+      "working_directory": [
+        "/opt/es-memory/app-v2"
+      ]
+    },
+    "memory-session-maint.timer": {
+      "exec_start": [],
+      "port_env": [],
+      "working_directory": []
+    },
+    "memory-v2-proxy.service": {
+      "exec_start": [
+        "/opt/es-memory/venv/bin/python proxy.py"
+      ],
+      "port_env": [
+        "Environment=UPSTREAM_URL=http://127.0.0.1:8010/memory",
+        "Environment=PORT=8767"
+      ],
+      "working_directory": [
+        "/opt/es-memory/app-v2"
+      ]
+    }
+  }
+}

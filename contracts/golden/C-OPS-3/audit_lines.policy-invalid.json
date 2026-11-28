@@ -1,0 +1,3 @@
+[
+  "AUDIT policy_invalid reason=client x: invalid tool 'y=z' client_credentials=deny-all"
+]

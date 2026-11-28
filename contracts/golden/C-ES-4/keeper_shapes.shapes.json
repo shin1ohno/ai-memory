@@ -1,0 +1,43 @@
+{
+  "keeper_merged_keys": [
+    "content",
+    "content_hash",
+    "derived_from",
+    "embedding",
+    "entities",
+    "memory_type",
+    "provenance",
+    "reconcile_status",
+    "tags",
+    "use_count"
+  ],
+  "revised_keys": [
+    "content",
+    "content_hash",
+    "derived_from",
+    "embedding",
+    "entities",
+    "memory_type",
+    "provenance",
+    "reconcile_status",
+    "tags",
+    "use_count"
+  ],
+  "server_fact_keys": [
+    "content",
+    "content_hash",
+    "embedding",
+    "entities",
+    "memory_type",
+    "provenance",
+    "reconcile_status",
+    "tags",
+    "use_count"
+  ],
+  "server_provenance_keys": [
+    "agent",
+    "session_id",
+    "source_class",
+    "written_at"
+  ]
+}

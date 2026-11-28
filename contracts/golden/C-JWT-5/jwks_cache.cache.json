@@ -1,0 +1,9 @@
+{
+  "concurrent_fetches": 1,
+  "concurrent_statuses": [
+    200
+  ],
+  "redirect_target_fetched": 0,
+  "redirected_jwks": 401,
+  "while_jwks_fails": 200
+}

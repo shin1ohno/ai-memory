@@ -1,0 +1,76 @@
+{
+  "mcp-1MiB": {
+    "body": null,
+    "status": 200,
+    "upstream_body_len": 1048576
+  },
+  "mcp-1MiB+1": {
+    "body": {
+      "error": "too_large"
+    },
+    "status": 413,
+    "upstream_body_len": null
+  },
+  "mcp-1MiB+1-chunked": {
+    "body": {
+      "error": "too_large"
+    },
+    "status": 413,
+    "upstream_body_len": null
+  },
+  "mcp-1MiB-chunked": {
+    "body": null,
+    "status": 200,
+    "upstream_body_len": 1048576
+  },
+  "sessions-8MiB": {
+    "body": null,
+    "status": 200,
+    "upstream_body_len": 8388608
+  },
+  "sessions-8MiB+1": {
+    "body": {
+      "error": "too_large"
+    },
+    "status": 413,
+    "upstream_body_len": null
+  },
+  "sessions-8MiB+1-chunked": {
+    "body": {
+      "error": "too_large"
+    },
+    "status": 413,
+    "upstream_body_len": null
+  },
+  "sessions-dot-1MiB+1": {
+    "body": {
+      "error": "too_large"
+    },
+    "status": 413,
+    "upstream_body_len": null
+  },
+  "sessions-dotdot-1MiB+1": {
+    "body": {
+      "error": "too_large"
+    },
+    "status": 413,
+    "upstream_body_len": null
+  },
+  "sessions-percent-1MiB+1": {
+    "body": {
+      "error": "too_large"
+    },
+    "status": 413,
+    "upstream_body_len": null
+  },
+  "sessions-percent-2F-1MiB": {
+    "body": null,
+    "status": 200,
+    "upstream_body_len": 1048576
+  },
+  "unauthenticated-1MiB+1": {
+    "body": null,
+    "status": 401,
+    "upstream_body_len": null
+  }
+}

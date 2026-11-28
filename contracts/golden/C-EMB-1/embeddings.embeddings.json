@@ -1,0 +1,76 @@
+{
+  "batches": {
+    "batch_sizes": [
+      128,
+      17
+    ],
+    "chunks": 145,
+    "job_returned": true,
+    "job_status": "done"
+  },
+  "openai": [
+    {
+      "dimensions": 1024,
+      "input": [
+        "OpenAI shape probe"
+      ],
+      "model": "text-embedding-3-large"
+    }
+  ],
+  "order_chunks": 5,
+  "order_restored": true,
+  "retry-4xx": {
+    "attempts": 1,
+    "error_prefix": "Error executing tool remember",
+    "gap_ge_0.45": false,
+    "isError": true,
+    "took_lt_5s": true
+  },
+  "retry-5xx": {
+    "attempts": 2,
+    "error_prefix": null,
+    "gap_ge_0.45": true,
+    "isError": false,
+    "took_lt_5s": true
+  },
+  "retry-5xx-twice": {
+    "attempts": 2,
+    "error_prefix": "Error executing tool remember",
+    "gap_ge_0.45": true,
+    "isError": true,
+    "took_lt_5s": true
+  },
+  "retry-drop": {
+    "attempts": 2,
+    "error_prefix": null,
+    "gap_ge_0.45": true,
+    "isError": false,
+    "took_lt_5s": true
+  },
+  "voyage": [
+    {
+      "authorization": "Bearer",
+      "body": {
+        "input": [
+          "Embedding probe document"
+        ],
+        "input_type": "document",
+        "model": "voyage-3-large",
+        "output_dimension": 1024
+      },
+      "path": "/embeddings"
+    },
+    {
+      "authorization": "Bearer",
+      "body": {
+        "input": [
+          "embedding probe"
+        ],
+        "input_type": "query",
+        "model": "voyage-3-large",
+        "output_dimension": 1024
+      },
+      "path": "/embeddings"
+    }
+  ]
+}

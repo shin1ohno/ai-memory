@@ -1,0 +1,10 @@
+{
+  "jwk-without-kid": 200,
+  "jwk-without-kid-token-kid-default": 200,
+  "kid-k1": 200,
+  "kid-k2": 200,
+  "no-kid-signed-by-first": 200,
+  "no-kid-signed-by-second": 401,
+  "unknown-kid-signed-by-first": 200,
+  "unknown-kid-signed-by-second": 401
+}
