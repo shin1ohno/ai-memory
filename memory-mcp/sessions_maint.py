@@ -347,46 +347,65 @@ async def _remask_one(run: _Run, session_key: str, key: bytes, version: str, bac
     src, seq, term = got
     chunks = [dict(c) for c in (src.get("archive_chunks") or [])]
     originals: list = []  # (object name, original compressed bytes) for rollback
-    if backend is not None:
-        for c in chunks:
-            if "name" in c:
-                name = sessions_archive.object_name(src["host"], session_key, tool_result=c["name"])
-            elif c.get("archived") and "agent_id" not in c:
-                name = sessions_archive.object_name(src["host"], session_key,
-                                                    generation=c["generation"], offset=c["offset"])
-            else:
-                continue
-            raw = await backend.get(name)
-            data = sessions_archive.decompress(raw)
-            if hashlib.sha256(data).hexdigest() != c.get("sha256"):
-                _log(f"remask skipped archive_tampered session={session_key}")
-                await _rollback(backend, originals)
-                return False
-            if "name" in c:
-                new, _ = session_redact.redact_text(data.decode("utf-8"), key, version)
-                new = new.encode("utf-8")
-            else:
-                new = _remask_lines(data, key, version)
-            if new == data:
-                continue
-            await backend.put(name, sessions_archive.compress(new))
-            originals.append((name, raw))
-            c["sha256"] = hashlib.sha256(new).hexdigest()
-            c["bytes"] = len(new)
-            run.counts["remasked_objects"] += 1
-    doc = dict(src)
-    doc["archive_chunks"] = chunks
-    if any("name" not in c and "agent_id" not in c for c in chunks) and "archive_bytes" in doc:
-        doc["archive_bytes"] = sum(c.get("bytes", 0) for c in chunks
-                                   if "name" not in c and "agent_id" not in c and c.get("archived"))
-    if isinstance(doc.get("title"), str):
-        doc["title"], _ = session_redact.redact_text(doc["title"], key, version)
-    doc["redact_version"] = version
+    # Once an object is rewritten the archive no longer matches the doc's
+    # sha256 values, and the session reads back as archive_tampered until the
+    # doc is written or the objects are restored. So every way out short of a
+    # successful doc PUT restores them.
+    tampered = conflict = False
     try:
-        await sa._put_session(session_key, doc, seq, term)
+        if backend is not None:
+            for c in chunks:
+                if "name" in c:
+                    name = sessions_archive.object_name(src["host"], session_key,
+                                                        tool_result=c["name"])
+                elif c.get("archived") and "agent_id" not in c:
+                    name = sessions_archive.object_name(src["host"], session_key,
+                                                        generation=c["generation"],
+                                                        offset=c["offset"])
+                else:
+                    continue
+                raw = await backend.get(name)
+                data = sessions_archive.decompress(raw)
+                if hashlib.sha256(data).hexdigest() != c.get("sha256"):
+                    tampered = True
+                    break
+                if "name" in c:
+                    new, _ = session_redact.redact_text(data.decode("utf-8"), key, version)
+                    new = new.encode("utf-8")
+                else:
+                    new = _remask_lines(data, key, version)
+                if new == data:
+                    continue
+                # Recorded before the put: a put that raised may still have
+                # landed, and writing the original back is harmless if not.
+                originals.append((name, raw))
+                await backend.put(name, sessions_archive.compress(new))
+                c["sha256"] = hashlib.sha256(new).hexdigest()
+                c["bytes"] = len(new)
+                run.counts["remasked_objects"] += 1
+        if not tampered:
+            doc = dict(src)
+            doc["archive_chunks"] = chunks
+            if any("name" not in c and "agent_id" not in c for c in chunks) and "archive_bytes" in doc:
+                doc["archive_bytes"] = sum(c.get("bytes", 0) for c in chunks
+                                           if "name" not in c and "agent_id" not in c
+                                           and c.get("archived"))
+            if isinstance(doc.get("title"), str):
+                doc["title"], _ = session_redact.redact_text(doc["title"], key, version)
+            doc["redact_version"] = version
+            await sa._put_session(session_key, doc, seq, term)
     except sa._Conflict:
         # The doc changed since we read it: restore the objects it still
         # describes (their sha256 values are the old ones) and retry next run.
+        conflict = True
+    except Exception:
+        # The caller counts this exception as the run's error, so it is the one
+        # re-raised; a restore that fails too (archive down) is only logged.
+        await _rollback_after_failure(backend, originals, session_key)
+        raise
+    if tampered:
+        _log(f"remask skipped archive_tampered session={session_key}")
+    if tampered or conflict:
         await _rollback(backend, originals)
         return False
     return True
@@ -395,6 +414,21 @@ async def _remask_one(run: _Run, session_key: str, key: bytes, version: str, bac
 async def _rollback(backend, originals: list) -> None:
     for name, raw in originals:
         await backend.put(name, raw)
+
+
+async def _rollback_after_failure(backend, originals: list, session_key: str) -> None:
+    """One pass, no retry: every object gets one restore attempt even when an
+    earlier one failed, and failures are logged rather than raised."""
+    failed, kind = 0, ""
+    for name, raw in originals:
+        try:
+            await backend.put(name, raw)
+        except Exception as exc:  # noqa: BLE001 — the original error wins
+            failed += 1
+            kind = exc.__class__.__name__
+    if failed:
+        _log(f"remask rollback failed session={session_key} objects={failed}/{len(originals)} "
+             f"kind={kind}; the session reads as archive_tampered until restored")
 
 
 # --------------------------------------------------------------------------- #

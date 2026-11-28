@@ -11,15 +11,19 @@ message docs and archive objects), the purge-marker sweep (stragglers removed,
 markers older than 30 days dropped), pending-embedding retry on success and on
 provider failure, re-mask with a fake newer ruleset (archive objects, chunk
 sha256, message text, title; and the r1 no-op), a missing HMAC key, the run
-record /status reads, and the lock that keeps two runs apart.
+record /status reads, the lock that keeps two runs apart, and the re-mask
+rollback on every failure after an object was rewritten (ES 500, a failed
+object put, a 409, a tampered later chunk, and a rollback that fails itself).
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import fcntl
 import hashlib
+import io
 import json
 import os
 import sys
@@ -434,6 +438,123 @@ class Remask(Base):
         self.assertEqual(FAKE.src(SI, key)["redact_version"], "r1")
         self.assertEqual(arc.decompress(BACKEND.objects[name]), b'{"forged":1}\n')
 
+
+
+class FailingES:
+    """Wraps FAKE.request: the session-doc PUT answers `status` instead."""
+
+    def __init__(self, status):
+        self.status = status
+
+    def __enter__(self):
+        self.saved = FAKE.request
+
+        async def request(method, path, **kw):
+            if method == "PUT" and path.startswith(f"/{SI}/_doc/"):
+                return Resp(self.status, {})
+            return await self.saved(method, path, **kw)
+
+        FAKE.request = request
+        return self
+
+    def __exit__(self, *a):
+        FAKE.request = self.saved
+
+
+class FailingPuts:
+    """Wraps BACKEND.put: calls numbered in `fail` raise ArchiveError."""
+
+    def __init__(self, fail):
+        self.fail = fail
+        self.calls = 0
+
+    def __enter__(self):
+        async def put(name, data):
+            self.calls += 1
+            if self.calls in self.fail:
+                raise arc.ArchiveError("put")
+            BACKEND.objects[name] = bytes(data)
+
+        BACKEND.put = put
+        return self
+
+    def __exit__(self, *a):
+        del BACKEND.put
+
+
+class RemaskRollback(Base):
+    """Every way the write sequence can stop after an object was rewritten
+    must leave the archive matching the session doc's sha256 values, or the
+    session reads back as archive_tampered."""
+
+    _key_file = Remask._key_file
+    _session = Remask._session
+
+    def _assert_restored(self, key, before):
+        self.assertEqual(FAKE.src(SI, key)["redact_version"], "r1")
+        self.assertEqual(BACKEND.objects, before)
+        got = asyncio.run(sa._get_session(key))
+        data = asyncio.run(sa._download_segments(*got))  # raises on a sha256 mismatch
+        self.assertIn(SECRET2.encode(), data)
+
+    def test_es_500_on_session_put_restores_objects(self):
+        key = self._session()
+        self._key_file()
+        before = dict(BACKEND.objects)
+        with FakeR2(), FailingES(500):
+            out = self.run_maint()
+        self.assertEqual(out["status"], "errors", out)
+        self.assertEqual(out["remasked_sessions"], 0)
+        self._assert_restored(key, before)
+
+    def test_failing_second_object_put_restores_first(self):
+        key = self._session()
+        self._key_file()
+        before = dict(BACKEND.objects)
+        with FakeR2(), FailingPuts({2}):
+            out = self.run_maint()
+        self.assertEqual(out["status"], "errors", out)
+        self.assertEqual(out["remasked_sessions"], 0)
+        self._assert_restored(key, before)
+
+    def test_conflict_rolls_back_without_error(self):
+        key = self._session()
+        self._key_file()
+        before = dict(BACKEND.objects)
+        with FakeR2(), FailingES(409):
+            out = self.run_maint()
+        self.assertEqual(out["status"], "ok", out)  # retried next run, not an error
+        self.assertEqual(out["remasked_sessions"], 0)
+        self._assert_restored(key, before)
+
+    def test_tamper_after_a_rewrite_rolls_back(self):
+        key = self._session()
+        self._key_file()
+        blob = arc.object_name("pro-dev", key, tool_result="t1.txt")
+        BACKEND.objects[blob] = arc.compress(b"forged")
+        before = dict(BACKEND.objects)
+        with FakeR2():
+            out = self.run_maint()
+        self.assertEqual(out["status"], "ok", out)
+        self.assertEqual(out["remasked_sessions"], 0)
+        self.assertEqual(FAKE.src(SI, key)["redact_version"], "r1")
+        self.assertEqual(BACKEND.objects, before)  # main chunk restored, blob untouched
+
+    def test_failed_rollback_is_logged_and_keeps_the_original_error(self):
+        self._session()
+        self._key_file()
+        err = io.StringIO()
+        # Puts 1-2 are the rewrites; every restore after that fails too.
+        with FakeR2(), FailingES(500), FailingPuts({3, 4, 5, 6}) as puts, \
+                contextlib.redirect_stderr(err):
+            out = self.run_maint()
+        self.assertEqual(out["status"], "errors", out)
+        self.assertEqual(out["errors"], 1)
+        self.assertEqual(puts.calls, 4)  # each object restored once, no retry loop
+        log = err.getvalue()
+        self.assertIn("remask rollback failed", log)
+        self.assertIn("ArchiveError", log)
+        self.assertRegex(log, r"error remask session=\S+ ESUnavailable")
 
 class RunRecordAndLock(Base):
     def test_run_record(self):
