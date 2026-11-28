@@ -1,0 +1,21 @@
+{
+  "after_run": {
+    "sk_kept": "present",
+    "sk_marker-old": "removed",
+    "sk_marker-young": "present"
+  },
+  "es_down_exit": 1,
+  "extra_args_exit": 64,
+  "locked_es_calls": 0,
+  "locked_exit": 0,
+  "no_args_exit": 64,
+  "record": {
+    "errors": 1,
+    "expired_deleted": 1,
+    "host": "str",
+    "loop_lag_ms": "float",
+    "run_kind": "session-maint",
+    "written_at": "str"
+  },
+  "run_exit": 1
+}

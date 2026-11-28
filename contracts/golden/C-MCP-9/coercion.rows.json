@@ -1,0 +1,75 @@
+[
+  {
+    "case": "top_k-string",
+    "isError": false,
+    "keys": [
+      "hits"
+    ],
+    "text_prefix": null
+  },
+  {
+    "case": "top_k-float-string",
+    "isError": true,
+    "keys": null,
+    "text_prefix": "Error executing tool recall: "
+  },
+  {
+    "case": "top_k-null",
+    "isError": true,
+    "keys": null,
+    "text_prefix": "Error executing tool recall: "
+  },
+  {
+    "case": "filters-json-string",
+    "isError": false,
+    "keys": [
+      "hits"
+    ],
+    "text_prefix": null
+  },
+  {
+    "case": "filters-null",
+    "isError": false,
+    "keys": [
+      "hits"
+    ],
+    "text_prefix": null
+  },
+  {
+    "case": "include_auto-string",
+    "isError": false,
+    "keys": [
+      "hits"
+    ],
+    "text_prefix": null
+  },
+  {
+    "case": "tags-json-string",
+    "isError": false,
+    "keys": [
+      "action",
+      "id",
+      "reason",
+      "reconcile_status",
+      "routed_type"
+    ],
+    "text_prefix": null
+  },
+  {
+    "case": "limit-string",
+    "isError": false,
+    "keys": [
+      "items",
+      "total",
+      "total_is_lower_bound",
+      "truncated"
+    ],
+    "text_prefix": null
+  },
+  {
+    "case": "include_chain-int",
+    "isError": true,
+    "keys": null,
+    "text_prefix": "Error executing tool get: "
+  }
+]

@@ -1,0 +1,10 @@
+{
+  "fetches_after_first": 1,
+  "fetches_after_old": 3,
+  "fetches_after_rotation": 2,
+  "fetches_end": 3,
+  "first": 200,
+  "old_key_after_rotation": 401,
+  "old_key_again": 401,
+  "rotated_token": 200
+}

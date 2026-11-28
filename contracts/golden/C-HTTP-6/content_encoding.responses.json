@@ -1,0 +1,39 @@
+{
+  "IDENTITY": {
+    "body": null,
+    "status": 200
+  },
+  "absent": {
+    "body": null,
+    "status": 200
+  },
+  "empty": {
+    "body": null,
+    "status": 200
+  },
+  "gzip": {
+    "body": {
+      "error": "unsupported_content_encoding"
+    },
+    "status": 415
+  },
+  "identity": {
+    "body": null,
+    "status": 200
+  },
+  "padded": {
+    "body": null,
+    "status": 200
+  },
+  "upstream-down": {
+    "body": {
+      "error": {
+        "code": -32000,
+        "message": "upstream_error"
+      },
+      "id": null,
+      "jsonrpc": "2.0"
+    },
+    "status": 502
+  }
+}

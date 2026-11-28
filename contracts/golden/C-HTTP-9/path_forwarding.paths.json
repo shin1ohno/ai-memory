@@ -1,0 +1,58 @@
+{
+  "/mcp": {
+    "status": 200,
+    "upstream_raw_path": "/memory/mcp"
+  },
+  "/mcp/": {
+    "status": 200,
+    "upstream_raw_path": "/memory/mcp/"
+  },
+  "/mcp/%2F": {
+    "status": 200,
+    "upstream_raw_path": "/memory/mcp/%2F"
+  },
+  "/mcp/%E6%97%A5%E6%9C%AC": {
+    "status": 200,
+    "upstream_raw_path": "/memory/mcp/%E6%97%A5%E6%9C%AC"
+  },
+  "/mcp//double": {
+    "status": 200,
+    "upstream_raw_path": "/memory/mcp//double"
+  },
+  "/mcp/a%20b": {
+    "status": 200,
+    "upstream_raw_path": "/memory/mcp/a%20b"
+  },
+  "/mcp;param=1": {
+    "status": 200,
+    "upstream_raw_path": "/memory/mcp;param=1"
+  },
+  "/mcp?": {
+    "status": 200,
+    "upstream_raw_path": "/memory/mcp"
+  },
+  "/mcp?=x": {
+    "status": 200,
+    "upstream_raw_path": "/memory/mcp?=x"
+  },
+  "/mcp?a=1&b=2": {
+    "status": 200,
+    "upstream_raw_path": "/memory/mcp?a=1&b=2"
+  },
+  "/mcp?q=": {
+    "status": 200,
+    "upstream_raw_path": "/memory/mcp?q="
+  },
+  "/mcp?q=%E6%97%A5&r=a+b": {
+    "status": 200,
+    "upstream_raw_path": "/memory/mcp?q=%E6%97%A5&r=a+b"
+  },
+  "/other/path": {
+    "status": 200,
+    "upstream_raw_path": "/memory/other/path"
+  },
+  "/sessions/v1/status?host=a": {
+    "status": 200,
+    "upstream_raw_path": "/memory/sessions/v1/status?host=a"
+  }
+}

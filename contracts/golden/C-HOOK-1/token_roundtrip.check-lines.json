@@ -1,0 +1,14 @@
+[
+  "ok    credentials file <local>",
+  "ok    token issued by <local>",
+  "ok    token aud includes \"memory\"",
+  "ok    token sub equals the client_id",
+  "ok    token lifetime is 3600s",
+  "ok    MCP session opened at <local>",
+  "ok    ingest file-memory/roundtrip-host/_selftest/roundtrip",
+  "ok    forget by id",
+  "ok    forget by (dataset, doc_key)",
+  "ok    recall denied with policy_denied:",
+  "ok    ingest into dataset memory-mirror-selftest-denied denied with policy_denied:",
+  "ok    forget in dataset memory-mirror-selftest-denied denied with policy_denied:"
+]

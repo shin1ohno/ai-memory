@@ -1,0 +1,44 @@
+{
+  "forget_queries": [
+    {
+      "bool": {
+        "must": [
+          {
+            "term": {
+              "dataset": "file-memory"
+            }
+          },
+          {
+            "term": {
+              "doc_key": "roundtrip-host/-work-roundtrip/roundtrip-note"
+            }
+          },
+          {
+            "term": {
+              "provenance.agent": "memory-mirror"
+            }
+          }
+        ],
+        "must_not": [
+          {
+            "exists": {
+              "field": "superseded_by"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "ingested": [
+    {
+      "agent": "memory-mirror",
+      "dataset": "file-memory",
+      "doc_key": "roundtrip-host/-work-roundtrip/roundtrip-note",
+      "source_class": "tool-output",
+      "tags": []
+    }
+  ],
+  "state_after_delete": {},
+  "sweep1_exit": 0,
+  "sweep2_exit": 0
+}

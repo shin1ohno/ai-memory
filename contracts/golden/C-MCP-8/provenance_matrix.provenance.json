@@ -1,0 +1,91 @@
+{
+  "matrix": [
+    {
+      "caller": "authorization_code",
+      "isError": false,
+      "superseded_by": "forget",
+      "target_source_class": "user-stated",
+      "text": {
+        "superseded_count": 1
+      }
+    },
+    {
+      "caller": "client_credentials-own",
+      "isError": true,
+      "superseded_by": null,
+      "target_source_class": "user-stated",
+      "text": "Error executing tool forget: grant=client_credentials agent=roundtrip-writer not permitted to forget id=matrix-2"
+    },
+    {
+      "caller": "client_credentials-other",
+      "isError": true,
+      "superseded_by": null,
+      "target_source_class": "user-stated",
+      "text": "Error executing tool forget: grant=client_credentials agent=memory-keeper not permitted to forget id=matrix-3"
+    },
+    {
+      "caller": "authorization_code",
+      "isError": false,
+      "superseded_by": "forget",
+      "target_source_class": "tool-output",
+      "text": {
+        "superseded_count": 1
+      }
+    },
+    {
+      "caller": "client_credentials-own",
+      "isError": false,
+      "superseded_by": "forget",
+      "target_source_class": "tool-output",
+      "text": {
+        "superseded_count": 1
+      }
+    },
+    {
+      "caller": "client_credentials-other",
+      "isError": true,
+      "superseded_by": null,
+      "target_source_class": "tool-output",
+      "text": "Error executing tool forget: grant=client_credentials agent=memory-keeper not permitted to forget id=matrix-6"
+    },
+    {
+      "caller": "authorization_code",
+      "isError": false,
+      "superseded_by": "forget",
+      "target_source_class": "reflection",
+      "text": {
+        "superseded_count": 1
+      }
+    },
+    {
+      "caller": "client_credentials-own",
+      "isError": false,
+      "superseded_by": "forget",
+      "target_source_class": "reflection",
+      "text": {
+        "superseded_count": 1
+      }
+    },
+    {
+      "caller": "client_credentials-other",
+      "isError": true,
+      "superseded_by": null,
+      "target_source_class": "reflection",
+      "text": "Error executing tool forget: grant=client_credentials agent=memory-keeper not permitted to forget id=matrix-9"
+    }
+  ],
+  "stamped": {
+    "authorization_code": {
+      "agent": "operator@example.test",
+      "session_id": "<id:1>",
+      "source_class": "user-stated",
+      "written_at": "<ts>"
+    },
+    "client_credentials": {
+      "agent": "roundtrip-writer",
+      "session_id": "<id:1>",
+      "source_class": "tool-output",
+      "written_at": "<ts>"
+    }
+  }
+}

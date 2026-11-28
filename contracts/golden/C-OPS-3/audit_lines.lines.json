@@ -1,0 +1,14 @@
+[
+  "POLICY memory-keeper -> (none) @ (none)",
+  "POLICY monitoring-prober -> (none) @ (none)",
+  "POLICY memory-mirror -> ingest,forget @ file-memory",
+  "POLICY roundtrip-writer -> ingest,forget @ notes|file-memory",
+  "POLICY session-search-a -> (none) @ (none)",
+  "SESSIONS scope-rule 0 match=client_id,grant host=host-a scopes=sessions:ingest,sessions:read",
+  "SESSIONS scope-rule 1 match=client_id,grant host=host-b scopes=sessions:ingest,sessions:read",
+  "SESSIONS scope-rule 2 match=grant,sub host=- scopes=sessions:purge,sessions:read",
+  "SESSIONS scope-rule 3 match=client_id host=- scopes=sessions:ingest,sessions:purge,sessions:read",
+  "AUDIT deny tool=recall client=memory-mirror dataset=-",
+  "AUDIT deny tool=ingest client=memory-mirror dataset=notes?AUDIT?forged",
+  "AUDIT supersede id=<es-id> by=operator@example.test grant=authorization_code"
+]

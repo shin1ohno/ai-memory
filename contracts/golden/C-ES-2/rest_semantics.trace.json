@@ -1,0 +1,1052 @@
+[
+  {
+    "requests": [
+      {
+        "body": {
+          "_source": [
+            "reconcile_status",
+            "tags"
+          ],
+          "query": {
+            "bool": {
+              "must": [
+                {
+                  "term": {
+                    "content_hash": "a5065b77f458b09438e22cc6f508bc96"
+                  }
+                }
+              ],
+              "must_not": [
+                {
+                  "exists": {
+                    "field": "superseded_by"
+                  }
+                }
+              ]
+            }
+          },
+          "size": 1
+        },
+        "method": "POST",
+        "path": "/memory-fact/_search",
+        "query": {}
+      },
+      {
+        "body": {
+          "content": "Roundtrip fact: the operator drinks green tea.",
+          "content_hash": "a5065b77f458b09438e22cc6f508bc96",
+          "embedding": "<vector len=1024>",
+          "entities": [],
+          "memory_type": "fact",
+          "provenance": {
+            "agent": "operator@example.test",
+            "session_id": "<id:1>",
+            "source_class": "user-stated",
+            "written_at": "<ts>"
+          },
+          "reconcile_status": "raw",
+          "tags": [
+            "todo"
+          ],
+          "use_count": 0
+        },
+        "method": "POST",
+        "path": "/memory-fact/_doc",
+        "query": {
+          "refresh": "wait_for"
+        }
+      }
+    ],
+    "step": "remember-fact"
+  },
+  {
+    "requests": [
+      {
+        "body": {
+          "_source": [
+            "reconcile_status",
+            "tags"
+          ],
+          "query": {
+            "bool": {
+              "must": [
+                {
+                  "term": {
+                    "content_hash": "a5065b77f458b09438e22cc6f508bc96"
+                  }
+                }
+              ],
+              "must_not": [
+                {
+                  "exists": {
+                    "field": "superseded_by"
+                  }
+                }
+              ]
+            }
+          },
+          "size": 1
+        },
+        "method": "POST",
+        "path": "/memory-fact/_search",
+        "query": {}
+      },
+      {
+        "body": {
+          "script": {
+            "lang": "painless",
+            "params": {
+              "tags": [
+                "drink"
+              ]
+            },
+            "source": "if (ctx._source.tags == null) { ctx._source.tags = new ArrayList(); } for (t in params.tags) { if (!ctx._source.tags.contains(t)) { ctx._source.tags.add(t); } }"
+          }
+        },
+        "method": "POST",
+        "path": "/memory-fact/_update/es00001",
+        "query": {
+          "refresh": "wait_for",
+          "retry_on_conflict": "3"
+        }
+      }
+    ],
+    "step": "remember-fact-dup"
+  },
+  {
+    "requests": [
+      {
+        "body": {
+          "_source": [
+            "tags"
+          ],
+          "query": {
+            "bool": {
+              "must": [
+                {
+                  "term": {
+                    "dataset": "notes"
+                  }
+                },
+                {
+                  "term": {
+                    "doc_key": "25e6c21c5dc9312de9e82873ad342a1a"
+                  }
+                }
+              ],
+              "must_not": [
+                {
+                  "exists": {
+                    "field": "superseded_by"
+                  }
+                }
+              ]
+            }
+          },
+          "size": 1,
+          "sort": [
+            {
+              "chunk_index": {
+                "order": "asc"
+              }
+            }
+          ]
+        },
+        "method": "POST",
+        "path": "/memory-knowledge/_search",
+        "query": {}
+      },
+      {
+        "body": [
+          {
+            "index": {
+              "_index": "memory-knowledge"
+            }
+          },
+          {
+            "chunk_index": 0,
+            "content": "Elasticsearch kNN uses int8_hnsw in this store.",
+            "content_hash": "25e6c21c5dc9312de9e82873ad342a1a",
+            "dataset": "notes",
+            "doc_key": "25e6c21c5dc9312de9e82873ad342a1a",
+            "embedding": "<vector len=1024>",
+            "entities": [],
+            "memory_type": "knowledge",
+            "parent_id": "<id:2>",
+            "provenance": {
+              "agent": "operator@example.test",
+              "session_id": "<id:1>",
+              "source_class": "tool-output",
+              "written_at": "<ts>"
+            },
+            "tags": [],
+            "use_count": 0
+          }
+        ],
+        "method": "POST",
+        "path": "/_bulk",
+        "query": {
+          "refresh": "true"
+        }
+      },
+      {
+        "body": {
+          "query": {
+            "bool": {
+              "must": [
+                {
+                  "term": {
+                    "dataset": "notes"
+                  }
+                },
+                {
+                  "term": {
+                    "doc_key": "25e6c21c5dc9312de9e82873ad342a1a"
+                  }
+                }
+              ],
+              "must_not": [
+                {
+                  "exists": {
+                    "field": "superseded_by"
+                  }
+                },
+                {
+                  "term": {
+                    "parent_id": "<id:2>"
+                  }
+                }
+              ]
+            }
+          },
+          "script": {
+            "lang": "painless",
+            "params": {
+              "at": "<ts>",
+              "sb": "<id:2>"
+            },
+            "source": "ctx._source.superseded_by = params.sb; ctx._source.superseded_at = params.at;"
+          }
+        },
+        "method": "POST",
+        "path": "/memory-knowledge/_update_by_query",
+        "query": {
+          "conflicts": "proceed",
+          "refresh": "true"
+        }
+      }
+    ],
+    "step": "remember-knowledge"
+  },
+  {
+    "requests": [
+      {
+        "body": {
+          "content": "Session summary: roundtrip suite captured goldens.",
+          "content_hash": "2f0a6f9918cfded6415f32b7c2f9111d",
+          "embedding": "<vector len=1024>",
+          "entities": [],
+          "expires_at": "<ts>",
+          "memory_type": "episode",
+          "provenance": {
+            "agent": "operator@example.test",
+            "session_id": "<id:1>",
+            "source_class": "reflection",
+            "written_at": "<ts>"
+          },
+          "tags": [],
+          "use_count": 0
+        },
+        "method": "POST",
+        "path": "/memory-episode/_doc",
+        "query": {
+          "refresh": "wait_for"
+        }
+      }
+    ],
+    "step": "remember-episode"
+  },
+  {
+    "requests": [
+      {
+        "body": [
+          {
+            "index": {
+              "_index": "memory-knowledge"
+            }
+          },
+          {
+            "chunk_index": 0,
+            "content": "Section 1. The roundtrip document describes chunk boundaries and overlap handling. Section 1. The roundtrip document describes chunk boundaries and overlap handling. Section 1. The roundtrip document describes chunk boundaries and overlap handling. Section 1. The roundtrip document describes chunk boundaries and overlap handling. Section 1. The roundtrip document describes chunk boundaries and overlap handling. Section 1. The roundtrip document describes chunk boundaries and overlap handling. \n\nSection 2. The roundtrip document describes chunk boundaries and overlap handling. Section 2. The roundtrip document describes chunk boundaries and overlap handling. Section 2. The roundtrip document describes chunk boundaries and overlap handling. Section 2. The roundtrip document describes chunk boundaries and overlap handling. Section 2. The roundtrip document describes chunk boundaries and overlap handling. Section 2. The roundtrip document describes chunk boundaries and overlap handling.",
+            "content_hash": "82a8b10844d0bc66b5c21fbc06606692",
+            "dataset": "notes",
+            "doc_key": "roundtrip/doc-1",
+            "embedding": "<vector len=1024>",
+            "entities": [],
+            "memory_type": "knowledge",
+            "parent_id": "<id:3>",
+            "provenance": {
+              "agent": "operator@example.test",
+              "session_id": "<id:1>",
+              "source_class": "tool-output",
+              "written_at": "<ts>"
+            },
+            "tags": [
+              "design"
+            ],
+            "use_count": 0
+          },
+          {
+            "index": {
+              "_index": "memory-knowledge"
+            }
+          },
+          {
+            "chunk_index": 1,
+            "content": "ndtrip document describes chunk boundaries and overlap handling. Section 2. The roundtrip document describes chunk boundaries and overlap handling. \n\nSection 3. The roundtrip document describes chunk boundaries and overlap handling. Section 3. The roundtrip document describes chunk boundaries and overlap handling. Section 3. The roundtrip document describes chunk boundaries and overlap handling. Section 3. The roundtrip document describes chunk boundaries and overlap handling. Section 3. The roundtrip document describes chunk boundaries and overlap handling. Section 3. The roundtrip document describes chunk boundaries and overlap handling. \n\nSection 4. The roundtrip document describes chunk boundaries and overlap handling. Section 4. The roundtrip document describes chunk boundaries and overlap handling. Section 4. The roundtrip document describes chunk boundaries and overlap handling. Section 4. The roundtrip document describes chunk boundaries and overlap handling. Section 4. The roundtrip document describes chunk boundaries and overlap handling. Section 4. The roundtrip document describes chunk boundaries and overlap handling.",
+            "content_hash": "de1fa35f0908ef9c38670e3abbd3b8b8",
+            "dataset": "notes",
+            "doc_key": "roundtrip/doc-1",
+            "embedding": "<vector len=1024>",
+            "entities": [],
+            "memory_type": "knowledge",
+            "parent_id": "<id:3>",
+            "provenance": {
+              "agent": "operator@example.test",
+              "session_id": "<id:1>",
+              "source_class": "tool-output",
+              "written_at": "<ts>"
+            },
+            "tags": [
+              "design"
+            ],
+            "use_count": 0
+          },
+          {
+            "index": {
+              "_index": "memory-knowledge"
+            }
+          },
+          {
+            "chunk_index": 2,
+            "content": "ndtrip document describes chunk boundaries and overlap handling. Section 4. The roundtrip document describes chunk boundaries and overlap handling. \n\nSection 5. The roundtrip document describes chunk boundaries and overlap handling. Section 5. The roundtrip document describes chunk boundaries and overlap handling. Section 5. The roundtrip document describes chunk boundaries and overlap handling. Section 5. The roundtrip document describes chunk boundaries and overlap handling. Section 5. The roundtrip document describes chunk boundaries and overlap handling. Section 5. The roundtrip document describes chunk boundaries and overlap handling.",
+            "content_hash": "4e94401a5eb7dc610c273fae44671134",
+            "dataset": "notes",
+            "doc_key": "roundtrip/doc-1",
+            "embedding": "<vector len=1024>",
+            "entities": [],
+            "memory_type": "knowledge",
+            "parent_id": "<id:3>",
+            "provenance": {
+              "agent": "operator@example.test",
+              "session_id": "<id:1>",
+              "source_class": "tool-output",
+              "written_at": "<ts>"
+            },
+            "tags": [
+              "design"
+            ],
+            "use_count": 0
+          }
+        ],
+        "method": "POST",
+        "path": "/_bulk",
+        "query": {
+          "refresh": "true"
+        }
+      },
+      {
+        "body": {
+          "query": {
+            "bool": {
+              "must": [
+                {
+                  "term": {
+                    "dataset": "notes"
+                  }
+                },
+                {
+                  "term": {
+                    "doc_key": "roundtrip/doc-1"
+                  }
+                }
+              ],
+              "must_not": [
+                {
+                  "exists": {
+                    "field": "superseded_by"
+                  }
+                },
+                {
+                  "term": {
+                    "parent_id": "<id:3>"
+                  }
+                }
+              ]
+            }
+          },
+          "script": {
+            "lang": "painless",
+            "params": {
+              "at": "<ts>",
+              "sb": "<id:3>"
+            },
+            "source": "ctx._source.superseded_by = params.sb; ctx._source.superseded_at = params.at;"
+          }
+        },
+        "method": "POST",
+        "path": "/memory-knowledge/_update_by_query",
+        "query": {
+          "conflicts": "proceed",
+          "refresh": "true"
+        }
+      }
+    ],
+    "step": "ingest"
+  },
+  {
+    "requests": [
+      {
+        "body": {
+          "query": {
+            "bool": {
+              "filter": [
+                {
+                  "bool": {
+                    "must_not": {
+                      "exists": {
+                        "field": "superseded_by"
+                      }
+                    }
+                  }
+                }
+              ],
+              "must": {
+                "match": {
+                  "content": "green tea operator"
+                }
+              }
+            }
+          },
+          "size": 50
+        },
+        "method": "POST",
+        "path": "/memory-all/_search",
+        "query": {}
+      },
+      {
+        "body": {
+          "knn": {
+            "field": "embedding",
+            "filter": [
+              {
+                "bool": {
+                  "must_not": {
+                    "exists": {
+                      "field": "superseded_by"
+                    }
+                  }
+                }
+              }
+            ],
+            "k": 50,
+            "num_candidates": 500,
+            "query_vector": "<vector len=1024>"
+          },
+          "size": 50
+        },
+        "method": "POST",
+        "path": "/memory-all/_search",
+        "query": {}
+      }
+    ],
+    "step": "recall"
+  },
+  {
+    "requests": [
+      {
+        "body": {
+          "query": {
+            "bool": {
+              "filter": [
+                {
+                  "bool": {
+                    "must_not": {
+                      "exists": {
+                        "field": "superseded_by"
+                      }
+                    }
+                  }
+                }
+              ],
+              "must": {
+                "match": {
+                  "content": "tea"
+                }
+              }
+            }
+          },
+          "size": 50
+        },
+        "method": "POST",
+        "path": "/memory-fact/_search",
+        "query": {}
+      },
+      {
+        "body": {
+          "knn": {
+            "field": "embedding",
+            "filter": [
+              {
+                "bool": {
+                  "must_not": {
+                    "exists": {
+                      "field": "superseded_by"
+                    }
+                  }
+                }
+              }
+            ],
+            "k": 50,
+            "num_candidates": 500,
+            "query_vector": "<vector len=1024>"
+          },
+          "size": 50
+        },
+        "method": "POST",
+        "path": "/memory-fact/_search",
+        "query": {}
+      }
+    ],
+    "step": "recall-fact"
+  },
+  {
+    "requests": [
+      {
+        "body": {
+          "query": {
+            "bool": {
+              "filter": [
+                {
+                  "term": {
+                    "tags": "todo"
+                  }
+                },
+                {
+                  "bool": {
+                    "must_not": {
+                      "exists": {
+                        "field": "superseded_by"
+                      }
+                    }
+                  }
+                }
+              ],
+              "must": {
+                "match": {
+                  "content": "roundtrip"
+                }
+              }
+            }
+          },
+          "size": 50
+        },
+        "method": "POST",
+        "path": "/memory-all/_search",
+        "query": {}
+      },
+      {
+        "body": {
+          "knn": {
+            "field": "embedding",
+            "filter": [
+              {
+                "term": {
+                  "tags": "todo"
+                }
+              },
+              {
+                "bool": {
+                  "must_not": {
+                    "exists": {
+                      "field": "superseded_by"
+                    }
+                  }
+                }
+              }
+            ],
+            "k": 50,
+            "num_candidates": 500,
+            "query_vector": "<vector len=1024>"
+          },
+          "size": 50
+        },
+        "method": "POST",
+        "path": "/memory-all/_search",
+        "query": {}
+      }
+    ],
+    "step": "recall-filter"
+  },
+  {
+    "requests": [
+      {
+        "body": {
+          "query": {
+            "ids": {
+              "values": [
+                "es00001"
+              ]
+            }
+          },
+          "size": 1
+        },
+        "method": "POST",
+        "path": "/memory-all/_search",
+        "query": {}
+      }
+    ],
+    "step": "get-fact"
+  },
+  {
+    "requests": [
+      {
+        "body": {
+          "query": {
+            "ids": {
+              "values": [
+                "<id:3>"
+              ]
+            }
+          },
+          "size": 1
+        },
+        "method": "POST",
+        "path": "/memory-all/_search",
+        "query": {}
+      },
+      {
+        "body": {
+          "query": {
+            "term": {
+              "parent_id": "<id:3>"
+            }
+          },
+          "size": 1,
+          "sort": [
+            {
+              "chunk_index": "asc"
+            }
+          ]
+        },
+        "method": "POST",
+        "path": "/memory-knowledge/_search",
+        "query": {}
+      },
+      {
+        "body": {
+          "_source": {
+            "excludes": [
+              "embedding"
+            ]
+          },
+          "query": {
+            "term": {
+              "parent_id": "<id:3>"
+            }
+          },
+          "size": 2000,
+          "sort": [
+            {
+              "chunk_index": "asc"
+            }
+          ]
+        },
+        "method": "POST",
+        "path": "/memory-knowledge/_search",
+        "query": {}
+      }
+    ],
+    "step": "get-doc"
+  },
+  {
+    "requests": [
+      {
+        "body": {
+          "query": {
+            "bool": {
+              "filter": [
+                {
+                  "bool": {
+                    "must_not": {
+                      "exists": {
+                        "field": "superseded_by"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "size": 5,
+          "sort": [
+            {
+              "provenance.written_at": {
+                "order": "desc"
+              }
+            }
+          ]
+        },
+        "method": "POST",
+        "path": "/memory-knowledge/_search",
+        "query": {}
+      }
+    ],
+    "step": "browse-knowledge"
+  },
+  {
+    "requests": [
+      {
+        "body": {
+          "query": {
+            "bool": {
+              "filter": [
+                {
+                  "terms": {
+                    "tags": [
+                      "todo",
+                      "design"
+                    ]
+                  }
+                },
+                {
+                  "bool": {
+                    "must_not": {
+                      "exists": {
+                        "field": "superseded_by"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "size": 50,
+          "sort": [
+            {
+              "provenance.written_at": {
+                "order": "desc"
+              }
+            }
+          ]
+        },
+        "method": "POST",
+        "path": "/memory-all/_search",
+        "query": {}
+      }
+    ],
+    "step": "browse-tag"
+  },
+  {
+    "requests": [
+      {
+        "body": null,
+        "method": "GET",
+        "path": "/memory-fact/_count",
+        "query": {}
+      },
+      {
+        "body": null,
+        "method": "GET",
+        "path": "/memory-knowledge/_count",
+        "query": {}
+      },
+      {
+        "body": null,
+        "method": "GET",
+        "path": "/memory-episode/_count",
+        "query": {}
+      },
+      {
+        "body": {
+          "query": {
+            "bool": {
+              "must": [
+                {
+                  "term": {
+                    "reconcile_status": "raw"
+                  }
+                }
+              ],
+              "must_not": [
+                {
+                  "exists": {
+                    "field": "superseded_by"
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "method": "POST",
+        "path": "/memory-fact/_count",
+        "query": {}
+      },
+      {
+        "body": {
+          "query": {
+            "term": {
+              "run_kind": "reconcile"
+            }
+          },
+          "size": 1,
+          "sort": [
+            {
+              "written_at": {
+                "order": "desc"
+              }
+            }
+          ]
+        },
+        "method": "POST",
+        "path": "/memory-stats/_search",
+        "query": {}
+      },
+      {
+        "body": {
+          "query": {
+            "term": {
+              "run_kind": "consolidate"
+            }
+          },
+          "size": 1,
+          "sort": [
+            {
+              "written_at": {
+                "order": "desc"
+              }
+            }
+          ]
+        },
+        "method": "POST",
+        "path": "/memory-stats/_search",
+        "query": {}
+      }
+    ],
+    "step": "memory-stats"
+  },
+  {
+    "requests": [
+      {
+        "body": {
+          "query": {
+            "ids": {
+              "values": [
+                "es00001"
+              ]
+            }
+          },
+          "size": 1
+        },
+        "method": "POST",
+        "path": "/memory-all/_search",
+        "query": {}
+      },
+      {
+        "body": {
+          "content": "Roundtrip fact: the operator drinks black tea.",
+          "content_hash": "317c914630b5efb0ee1e7db7392d75a1",
+          "derived_from": [
+            "<id:4>"
+          ],
+          "embedding": "<vector len=1024>",
+          "entities": [],
+          "memory_type": "fact",
+          "provenance": {
+            "agent": "operator@example.test",
+            "session_id": "<id:1>",
+            "source_class": "user-stated",
+            "written_at": "<ts>"
+          },
+          "reconcile_status": "raw",
+          "tags": [
+            "todo",
+            "drink"
+          ],
+          "use_count": 0
+        },
+        "method": "POST",
+        "path": "/memory-fact/_doc",
+        "query": {
+          "refresh": "wait_for"
+        }
+      },
+      {
+        "body": {
+          "doc": {
+            "superseded_at": "<ts>",
+            "superseded_by": "<id:5>"
+          }
+        },
+        "method": "POST",
+        "path": "/memory-fact/_update/es00001",
+        "query": {
+          "refresh": "true"
+        }
+      }
+    ],
+    "step": "revise-fact"
+  },
+  {
+    "requests": [
+      {
+        "body": {
+          "query": {
+            "ids": {
+              "values": [
+                "es00001"
+              ]
+            }
+          },
+          "size": 1
+        },
+        "method": "POST",
+        "path": "/memory-all/_search",
+        "query": {}
+      },
+      {
+        "body": {
+          "query": {
+            "ids": {
+              "values": [
+                "es00007"
+              ]
+            }
+          },
+          "size": 1
+        },
+        "method": "POST",
+        "path": "/memory-all/_search",
+        "query": {}
+      }
+    ],
+    "step": "get-chain"
+  },
+  {
+    "requests": [
+      {
+        "body": {
+          "query": {
+            "bool": {
+              "must": [
+                {
+                  "term": {
+                    "dataset": "notes"
+                  }
+                },
+                {
+                  "term": {
+                    "doc_key": "roundtrip/doc-1"
+                  }
+                }
+              ],
+              "must_not": [
+                {
+                  "exists": {
+                    "field": "superseded_by"
+                  }
+                }
+              ]
+            }
+          },
+          "script": {
+            "lang": "painless",
+            "params": {
+              "at": "<ts>",
+              "sb": "forget"
+            },
+            "source": "ctx._source.superseded_by = params.sb; ctx._source.superseded_at = params.at;"
+          }
+        },
+        "method": "POST",
+        "path": "/memory-knowledge/_update_by_query",
+        "query": {
+          "conflicts": "proceed",
+          "refresh": "true"
+        }
+      }
+    ],
+    "step": "forget-doc"
+  },
+  {
+    "requests": [
+      {
+        "body": {
+          "query": {
+            "ids": {
+              "values": [
+                "es00007"
+              ]
+            }
+          },
+          "size": 1
+        },
+        "method": "POST",
+        "path": "/memory-all/_search",
+        "query": {}
+      },
+      {
+        "body": {
+          "doc": {
+            "superseded_at": "<ts>",
+            "superseded_by": "forget"
+          }
+        },
+        "method": "POST",
+        "path": "/memory-fact/_update/es00007",
+        "query": {
+          "refresh": "true"
+        }
+      }
+    ],
+    "step": "forget-id"
+  },
+  {
+    "requests": [
+      {
+        "body": {
+          "query": {
+            "ids": {
+              "values": [
+                "does-not-exist"
+              ]
+            }
+          },
+          "size": 1
+        },
+        "method": "POST",
+        "path": "/memory-all/_search",
+        "query": {}
+      },
+      {
+        "body": {
+          "query": {
+            "term": {
+              "parent_id": "<id:6>"
+            }
+          },
+          "size": 1,
+          "sort": [
+            {
+              "chunk_index": "asc"
+            }
+          ]
+        },
+        "method": "POST",
+        "path": "/memory-knowledge/_search",
+        "query": {}
+      }
+    ],
+    "step": "get-missing"
+  }
+]

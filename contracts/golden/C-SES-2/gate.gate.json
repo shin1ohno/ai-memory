@@ -1,0 +1,49 @@
+{
+  "encoded-%2F": [
+    403,
+    "forbidden"
+  ],
+  "encoded-%2e": [
+    403,
+    "forbidden"
+  ],
+  "encoded-%2f": [
+    403,
+    "forbidden"
+  ],
+  "encoded-%5c": [
+    403,
+    "forbidden"
+  ],
+  "encoded-dot": [
+    403,
+    "forbidden"
+  ],
+  "encoded-dotdot": [
+    403,
+    "forbidden"
+  ],
+  "no-secret": [
+    401,
+    "unauthenticated"
+  ],
+  "not-ready-search": [
+    503,
+    "index_unavailable"
+  ],
+  "not-ready-status": [
+    200,
+    {
+      "error": true,
+      "ready": false
+    }
+  ],
+  "secret-unset": [
+    403,
+    "gate_unconfigured"
+  ],
+  "wrong-secret": [
+    401,
+    "unauthenticated"
+  ]
+}

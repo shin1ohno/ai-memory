@@ -1,0 +1,92 @@
+{
+  "basic-scheme": {
+    "body": {
+      "error": {
+        "code": -32001,
+        "message": "unauthorized"
+      },
+      "id": null,
+      "jsonrpc": "2.0"
+    },
+    "forwarded": 0,
+    "status": 401,
+    "www_authenticate": "Bearer resource_metadata=\"https://issuer.example.test/memory/.well-known/oauth-protected-resource\""
+  },
+  "client-not-allowed": {
+    "body": {
+      "error": {
+        "code": -32003,
+        "message": "forbidden_audience"
+      },
+      "id": null,
+      "jsonrpc": "2.0"
+    },
+    "forwarded": 0,
+    "status": 403,
+    "www_authenticate": null
+  },
+  "garbage-token": {
+    "body": {
+      "error": {
+        "code": -32001,
+        "message": "invalid_token"
+      },
+      "id": null,
+      "jsonrpc": "2.0"
+    },
+    "forwarded": 0,
+    "status": 401,
+    "www_authenticate": "Bearer error=\"invalid_token\", resource_metadata=\"https://issuer.example.test/memory/.well-known/oauth-protected-resource\""
+  },
+  "no-bearer": {
+    "body": {
+      "error": {
+        "code": -32001,
+        "message": "unauthorized"
+      },
+      "id": null,
+      "jsonrpc": "2.0"
+    },
+    "forwarded": 0,
+    "status": 401,
+    "www_authenticate": "Bearer resource_metadata=\"https://issuer.example.test/memory/.well-known/oauth-protected-resource\""
+  },
+  "ok-human": {
+    "body": null,
+    "forwarded": 1,
+    "status": 200,
+    "www_authenticate": null
+  },
+  "ok-machine": {
+    "body": null,
+    "forwarded": 1,
+    "status": 200,
+    "www_authenticate": null
+  },
+  "subject-not-allowed": {
+    "body": {
+      "error": {
+        "code": -32003,
+        "message": "forbidden_subject"
+      },
+      "id": null,
+      "jsonrpc": "2.0"
+    },
+    "forwarded": 0,
+    "status": 403,
+    "www_authenticate": null
+  },
+  "wrong-audience": {
+    "body": {
+      "error": {
+        "code": -32003,
+        "message": "forbidden_audience"
+      },
+      "id": null,
+      "jsonrpc": "2.0"
+    },
+    "forwarded": 0,
+    "status": 403,
+    "www_authenticate": null
+  }
+}

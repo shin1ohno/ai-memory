@@ -1,0 +1,25 @@
+{
+  "human": {
+    "content-type": "application/json",
+    "host": "<upstream host:port>",
+    "x-custom": "kept",
+    "x-forwarded-for": "127.0.0.1",
+    "x-forwarded-proto": "http",
+    "x-proxy-secret": "<proxy secret>",
+    "x-verified-client-id": "claude-connector",
+    "x-verified-grant": "authorization_code",
+    "x-verified-sub": "operator@example.test"
+  },
+  "machine": {
+    "content-type": "application/json",
+    "host": "<upstream host:port>",
+    "x-custom": "kept",
+    "x-forwarded-for": "127.0.0.1",
+    "x-forwarded-proto": "http",
+    "x-proxy-secret": "<proxy secret>",
+    "x-verified-client-id": "memory-mirror",
+    "x-verified-grant": "client_credentials",
+    "x-verified-sub": "memory-mirror"
+  },
+  "proto-https": "https"
+}

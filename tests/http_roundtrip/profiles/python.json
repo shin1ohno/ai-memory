@@ -1,0 +1,37 @@
+{
+  "name": "python",
+  "comment": "The Python implementation from this checkout, started the way systemd/memory-mcp-v2.service and systemd/memory-v2-proxy.service start it. {repo} is the repository root and {port} the port the suite picked. maint is the session-maint CLI; the suite appends its arguments.",
+  "mcp": {
+    "argv": [
+      "{repo}/.venv/bin/python",
+      "-m",
+      "uvicorn",
+      "server:app",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "{port}",
+      "--workers",
+      "1",
+      "--no-access-log"
+    ],
+    "cwd": "{repo}/memory-mcp"
+  },
+  "proxy": {
+    "argv": [
+      "{repo}/.venv-proxy/bin/python",
+      "proxy.py"
+    ],
+    "cwd": "{repo}/auth-proxy",
+    "env": {
+      "PORT": "{port}"
+    }
+  },
+  "maint": {
+    "argv": [
+      "{repo}/.venv/bin/python",
+      "sessions_maint.py"
+    ],
+    "cwd": "{repo}/memory-mcp"
+  }
+}

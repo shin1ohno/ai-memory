@@ -1,0 +1,162 @@
+[
+  {
+    "isError": false,
+    "response": {
+      "action": "added",
+      "id": "<id:1>",
+      "reason": "explicit fact",
+      "reconcile_status": "raw",
+      "routed_type": "fact"
+    },
+    "type": "fact",
+    "variant": "new"
+  },
+  {
+    "isError": false,
+    "response": {
+      "action": "added",
+      "id": "<id:2>",
+      "reason": "explicit fact",
+      "reconcile_status": "raw",
+      "routed_type": "fact"
+    },
+    "type": "fact",
+    "variant": "tagged"
+  },
+  {
+    "isError": false,
+    "response": {
+      "action": "noop",
+      "id": "<id:2>",
+      "reason": "explicit fact",
+      "reconcile_status": "raw",
+      "routed_type": "fact",
+      "tags_added": [
+        "extra"
+      ]
+    },
+    "type": "fact",
+    "variant": "duplicate"
+  },
+  {
+    "isError": false,
+    "response": {
+      "action": "added",
+      "id": "<id:3>",
+      "reason": "explicit knowledge",
+      "routed_type": "knowledge"
+    },
+    "type": "knowledge",
+    "variant": "new"
+  },
+  {
+    "isError": false,
+    "response": {
+      "action": "added",
+      "id": "<id:4>",
+      "reason": "explicit knowledge",
+      "routed_type": "knowledge"
+    },
+    "type": "knowledge",
+    "variant": "tagged"
+  },
+  {
+    "isError": false,
+    "response": {
+      "action": "added",
+      "id": "<id:5>",
+      "reason": "explicit knowledge",
+      "routed_type": "knowledge"
+    },
+    "type": "knowledge",
+    "variant": "duplicate"
+  },
+  {
+    "isError": false,
+    "response": {
+      "action": "added",
+      "id": "<id:6>",
+      "reason": "explicit episode",
+      "routed_type": "episode"
+    },
+    "type": "episode",
+    "variant": "new"
+  },
+  {
+    "isError": false,
+    "response": {
+      "action": "added",
+      "id": "<id:7>",
+      "reason": "explicit episode",
+      "routed_type": "episode"
+    },
+    "type": "episode",
+    "variant": "tagged"
+  },
+  {
+    "isError": false,
+    "response": {
+      "action": "added",
+      "id": "<id:8>",
+      "reason": "explicit episode",
+      "routed_type": "episode"
+    },
+    "type": "episode",
+    "variant": "duplicate"
+  },
+  {
+    "isError": false,
+    "response": {
+      "action": "added",
+      "id": "<id:9>",
+      "reason": "auto-routed to knowledge; fact requires explicit type='fact'",
+      "routed_type": "knowledge"
+    },
+    "type": "auto",
+    "variant": "new"
+  },
+  {
+    "isError": false,
+    "response": {
+      "action": "added",
+      "id": "<id:10>",
+      "reason": "auto-routed to knowledge; fact requires explicit type='fact'",
+      "routed_type": "knowledge"
+    },
+    "type": "auto",
+    "variant": "tagged"
+  },
+  {
+    "isError": false,
+    "response": {
+      "action": "added",
+      "id": "<id:11>",
+      "reason": "auto-routed to knowledge; fact requires explicit type='fact'",
+      "routed_type": "knowledge"
+    },
+    "type": "auto",
+    "variant": "duplicate"
+  },
+  {
+    "isError": false,
+    "response": {
+      "action": "added",
+      "id": "<id:12>",
+      "reason": "auto-routed to episode; fact requires explicit type='fact'",
+      "routed_type": "episode"
+    },
+    "type": "auto",
+    "variant": "dated"
+  },
+  {
+    "isError": false,
+    "response": {
+      "action": "noop",
+      "id": null,
+      "reason": "unknown type 'bogus'",
+      "routed_type": "bogus"
+    },
+    "type": "bogus",
+    "variant": "unknown"
+  }
+]

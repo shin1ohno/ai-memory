@@ -1,0 +1,580 @@
+{
+  "aliases": [
+    {
+      "actions": [
+        {
+          "add": {
+            "alias": "memory-all",
+            "index": "memory-fact"
+          }
+        },
+        {
+          "add": {
+            "alias": "memory-all",
+            "index": "memory-knowledge"
+          }
+        },
+        {
+          "add": {
+            "alias": "memory-all",
+            "index": "memory-episode"
+          }
+        }
+      ]
+    }
+  ],
+  "indices": {
+    "memory-episode": {
+      "mappings": {
+        "properties": {
+          "content": {
+            "analyzer": "ja_en_hybrid",
+            "type": "text"
+          },
+          "content_hash": {
+            "type": "keyword"
+          },
+          "derived_from": {
+            "type": "keyword"
+          },
+          "embedding": {
+            "dims": 1024,
+            "index": true,
+            "index_options": {
+              "type": "int8_hnsw"
+            },
+            "similarity": "cosine",
+            "type": "dense_vector"
+          },
+          "entities": {
+            "type": "keyword"
+          },
+          "expires_at": {
+            "type": "date"
+          },
+          "last_used_at": {
+            "type": "date"
+          },
+          "memory_type": {
+            "type": "keyword"
+          },
+          "promoted_to": {
+            "type": "keyword"
+          },
+          "provenance": {
+            "properties": {
+              "agent": {
+                "type": "keyword"
+              },
+              "session_id": {
+                "type": "keyword"
+              },
+              "source_class": {
+                "type": "keyword"
+              },
+              "written_at": {
+                "type": "date"
+              }
+            }
+          },
+          "superseded_at": {
+            "type": "date"
+          },
+          "superseded_by": {
+            "type": "keyword"
+          },
+          "tags": {
+            "type": "keyword"
+          },
+          "use_count": {
+            "type": "integer"
+          }
+        }
+      },
+      "settings": {
+        "analysis": {
+          "analyzer": {
+            "ja_en_hybrid": {
+              "filter": [
+                "kuromoji_baseform",
+                "kuromoji_part_of_speech",
+                "cjk_width",
+                "lowercase",
+                "kuromoji_stemmer"
+              ],
+              "tokenizer": "kuromoji_tokenizer",
+              "type": "custom"
+            }
+          }
+        },
+        "number_of_replicas": 1,
+        "number_of_shards": 1
+      }
+    },
+    "memory-fact": {
+      "mappings": {
+        "properties": {
+          "content": {
+            "analyzer": "ja_en_hybrid",
+            "type": "text"
+          },
+          "content_hash": {
+            "type": "keyword"
+          },
+          "derived_from": {
+            "type": "keyword"
+          },
+          "embedding": {
+            "dims": 1024,
+            "index": true,
+            "index_options": {
+              "type": "int8_hnsw"
+            },
+            "similarity": "cosine",
+            "type": "dense_vector"
+          },
+          "entities": {
+            "type": "keyword"
+          },
+          "last_used_at": {
+            "type": "date"
+          },
+          "memory_type": {
+            "type": "keyword"
+          },
+          "provenance": {
+            "properties": {
+              "agent": {
+                "type": "keyword"
+              },
+              "session_id": {
+                "type": "keyword"
+              },
+              "source_class": {
+                "type": "keyword"
+              },
+              "written_at": {
+                "type": "date"
+              }
+            }
+          },
+          "reconcile_status": {
+            "type": "keyword"
+          },
+          "superseded_at": {
+            "type": "date"
+          },
+          "superseded_by": {
+            "type": "keyword"
+          },
+          "tags": {
+            "type": "keyword"
+          },
+          "use_count": {
+            "type": "integer"
+          }
+        }
+      },
+      "settings": {
+        "analysis": {
+          "analyzer": {
+            "ja_en_hybrid": {
+              "filter": [
+                "kuromoji_baseform",
+                "kuromoji_part_of_speech",
+                "cjk_width",
+                "lowercase",
+                "kuromoji_stemmer"
+              ],
+              "tokenizer": "kuromoji_tokenizer",
+              "type": "custom"
+            }
+          }
+        },
+        "number_of_replicas": 1,
+        "number_of_shards": 1
+      }
+    },
+    "memory-knowledge": {
+      "mappings": {
+        "properties": {
+          "chunk_index": {
+            "type": "integer"
+          },
+          "content": {
+            "analyzer": "ja_en_hybrid",
+            "type": "text"
+          },
+          "content_hash": {
+            "type": "keyword"
+          },
+          "dataset": {
+            "type": "keyword"
+          },
+          "derived_from": {
+            "type": "keyword"
+          },
+          "doc_key": {
+            "type": "keyword"
+          },
+          "embedding": {
+            "dims": 1024,
+            "index": true,
+            "index_options": {
+              "type": "int8_hnsw"
+            },
+            "similarity": "cosine",
+            "type": "dense_vector"
+          },
+          "entities": {
+            "type": "keyword"
+          },
+          "last_used_at": {
+            "type": "date"
+          },
+          "memory_type": {
+            "type": "keyword"
+          },
+          "parent_id": {
+            "type": "keyword"
+          },
+          "provenance": {
+            "properties": {
+              "agent": {
+                "type": "keyword"
+              },
+              "session_id": {
+                "type": "keyword"
+              },
+              "source_class": {
+                "type": "keyword"
+              },
+              "written_at": {
+                "type": "date"
+              }
+            }
+          },
+          "superseded_at": {
+            "type": "date"
+          },
+          "superseded_by": {
+            "type": "keyword"
+          },
+          "tags": {
+            "type": "keyword"
+          },
+          "use_count": {
+            "type": "integer"
+          }
+        }
+      },
+      "settings": {
+        "analysis": {
+          "analyzer": {
+            "ja_en_hybrid": {
+              "filter": [
+                "kuromoji_baseform",
+                "kuromoji_part_of_speech",
+                "cjk_width",
+                "lowercase",
+                "kuromoji_stemmer"
+              ],
+              "tokenizer": "kuromoji_tokenizer",
+              "type": "custom"
+            }
+          }
+        },
+        "number_of_replicas": 1,
+        "number_of_shards": 1
+      }
+    },
+    "memory-session": {
+      "mappings": {
+        "_meta": {
+          "schema": "session/1"
+        },
+        "dynamic": "strict",
+        "properties": {
+          "archive_bytes": {
+            "type": "long"
+          },
+          "archive_chunks": {
+            "enabled": false,
+            "type": "object"
+          },
+          "archive_complete": {
+            "type": "boolean"
+          },
+          "archive_generation": {
+            "type": "integer"
+          },
+          "archived": {
+            "type": "boolean"
+          },
+          "cc_version": {
+            "type": "keyword"
+          },
+          "cwd": {
+            "type": "keyword"
+          },
+          "cwd_candidates": {
+            "type": "keyword"
+          },
+          "entrypoint": {
+            "type": "keyword"
+          },
+          "git_branch": {
+            "type": "keyword"
+          },
+          "has_subagents": {
+            "type": "boolean"
+          },
+          "host": {
+            "type": "keyword"
+          },
+          "interactive": {
+            "type": "boolean"
+          },
+          "jsonl_checked_at": {
+            "type": "date"
+          },
+          "jsonl_exists": {
+            "type": "boolean"
+          },
+          "jsonl_path": {
+            "index": false,
+            "type": "keyword"
+          },
+          "message_count": {
+            "type": "integer"
+          },
+          "parser_version": {
+            "type": "keyword"
+          },
+          "project_dir": {
+            "type": "keyword"
+          },
+          "purged_at": {
+            "type": "date"
+          },
+          "purged_by": {
+            "type": "keyword"
+          },
+          "redact_version": {
+            "type": "keyword"
+          },
+          "restored_from": {
+            "type": "keyword"
+          },
+          "resume_cwd": {
+            "type": "keyword"
+          },
+          "resume_cwd_verified": {
+            "type": "boolean"
+          },
+          "session_id": {
+            "type": "keyword"
+          },
+          "session_key": {
+            "type": "keyword"
+          },
+          "started_at": {
+            "type": "date"
+          },
+          "text_message_count": {
+            "type": "integer"
+          },
+          "title": {
+            "analyzer": "ja_en_hybrid",
+            "fields": {
+              "raw": {
+                "ignore_above": 256,
+                "type": "keyword"
+              }
+            },
+            "type": "text"
+          },
+          "title_source": {
+            "type": "keyword"
+          },
+          "updated_at": {
+            "type": "date"
+          }
+        }
+      },
+      "settings": {
+        "analysis": {
+          "analyzer": {
+            "ja_en_hybrid": {
+              "filter": [
+                "kuromoji_baseform",
+                "kuromoji_part_of_speech",
+                "cjk_width",
+                "lowercase",
+                "kuromoji_stemmer"
+              ],
+              "tokenizer": "kuromoji_tokenizer",
+              "type": "custom"
+            }
+          }
+        },
+        "codec": "best_compression",
+        "number_of_replicas": 0,
+        "number_of_shards": 1
+      }
+    },
+    "memory-session-message": {
+      "mappings": {
+        "_meta": {
+          "schema": "session-message/1"
+        },
+        "_source": {
+          "excludes": [
+            "embedding"
+          ]
+        },
+        "dynamic": "strict",
+        "properties": {
+          "agent_id": {
+            "type": "keyword"
+          },
+          "cwd": {
+            "type": "keyword"
+          },
+          "embedding": {
+            "dims": 1024,
+            "index_options": {
+              "type": "int8_hnsw"
+            },
+            "similarity": "cosine",
+            "type": "dense_vector"
+          },
+          "embedding_status": {
+            "type": "keyword"
+          },
+          "host": {
+            "type": "keyword"
+          },
+          "interactive": {
+            "type": "boolean"
+          },
+          "is_sidechain": {
+            "type": "boolean"
+          },
+          "line_offset": {
+            "type": "long"
+          },
+          "message_id": {
+            "type": "keyword"
+          },
+          "parent_uuid": {
+            "type": "keyword"
+          },
+          "redact_version": {
+            "type": "keyword"
+          },
+          "role": {
+            "type": "keyword"
+          },
+          "session_id": {
+            "type": "keyword"
+          },
+          "session_key": {
+            "type": "keyword"
+          },
+          "text": {
+            "analyzer": "ja_en_hybrid",
+            "type": "text"
+          },
+          "tool_names": {
+            "type": "keyword"
+          },
+          "tool_text": {
+            "analyzer": "ja_en_hybrid",
+            "type": "text"
+          },
+          "ts": {
+            "type": "date"
+          },
+          "uuid": {
+            "type": "keyword"
+          }
+        }
+      },
+      "settings": {
+        "analysis": {
+          "analyzer": {
+            "ja_en_hybrid": {
+              "filter": [
+                "kuromoji_baseform",
+                "kuromoji_part_of_speech",
+                "cjk_width",
+                "lowercase",
+                "kuromoji_stemmer"
+              ],
+              "tokenizer": "kuromoji_tokenizer",
+              "type": "custom"
+            }
+          }
+        },
+        "codec": "best_compression",
+        "number_of_replicas": 0,
+        "number_of_shards": 1,
+        "refresh_interval": "1s"
+      }
+    },
+    "memory-stats": {
+      "mappings": {
+        "properties": {
+          "errors": {
+            "type": "integer"
+          },
+          "expired_deleted": {
+            "type": "integer"
+          },
+          "guard_violations": {
+            "type": "integer"
+          },
+          "host": {
+            "type": "keyword"
+          },
+          "loop_lag_ms": {
+            "type": "float"
+          },
+          "promoted_total": {
+            "type": "integer"
+          },
+          "raw_backlog": {
+            "type": "integer"
+          },
+          "reconciled_this_run": {
+            "type": "integer"
+          },
+          "reconciled_total": {
+            "type": "integer"
+          },
+          "run_kind": {
+            "type": "keyword"
+          },
+          "stats_pruned": {
+            "type": "integer"
+          },
+          "superseded_total": {
+            "type": "integer"
+          },
+          "written_at": {
+            "type": "date"
+          }
+        }
+      },
+      "settings": {
+        "number_of_replicas": 1,
+        "number_of_shards": 1
+      }
+    }
+  },
+  "mapping_reads": [
+    "/memory-session-message/_mapping",
+    "/memory-session/_mapping"
+  ]
+}

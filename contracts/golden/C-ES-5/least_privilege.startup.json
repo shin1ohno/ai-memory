@@ -1,0 +1,16 @@
+{
+  "absent_exit_nonzero": true,
+  "absent_put_attempts": 10,
+  "absent_took_at_least_27s": true,
+  "no_sessions_search": [
+    503,
+    "index_unavailable"
+  ],
+  "no_sessions_status": [
+    200,
+    false
+  ],
+  "no_sessions_tools_call_ok": true,
+  "present_sessions_ready": true,
+  "present_starts": true
+}

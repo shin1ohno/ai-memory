@@ -1,0 +1,146 @@
+{
+  "DELETE /purged / ingest+read (session-search-a)": [
+    403,
+    "forbidden"
+  ],
+  "DELETE /purged / no rule (stranger)": [
+    403,
+    "forbidden"
+  ],
+  "DELETE /purged / read+purge (operator)": [
+    400,
+    "invalid_session_key"
+  ],
+  "DELETE /session / ingest+read (session-search-a)": [
+    403,
+    "forbidden"
+  ],
+  "DELETE /session / no rule (stranger)": [
+    403,
+    "forbidden"
+  ],
+  "DELETE /session / read+purge (operator)": [
+    400,
+    "invalid_session_key"
+  ],
+  "GET /archive / ingest+read (session-search-a)": [
+    400,
+    "invalid_session_key"
+  ],
+  "GET /archive / no rule (stranger)": [
+    403,
+    "forbidden"
+  ],
+  "GET /archive / read+purge (operator)": [
+    400,
+    "invalid_session_key"
+  ],
+  "GET /archive/tool-results / ingest+read (session-search-a)": [
+    400,
+    "invalid_session_key"
+  ],
+  "GET /archive/tool-results / no rule (stranger)": [
+    403,
+    "forbidden"
+  ],
+  "GET /archive/tool-results / read+purge (operator)": [
+    400,
+    "invalid_session_key"
+  ],
+  "GET /nope / ingest+read (session-search-a)": [
+    403,
+    "forbidden"
+  ],
+  "GET /nope / no rule (stranger)": [
+    403,
+    "forbidden"
+  ],
+  "GET /nope / read+purge (operator)": [
+    403,
+    "forbidden"
+  ],
+  "GET /preview / ingest+read (session-search-a)": [
+    400,
+    "invalid_session_key"
+  ],
+  "GET /preview / no rule (stranger)": [
+    403,
+    "forbidden"
+  ],
+  "GET /preview / read+purge (operator)": [
+    400,
+    "invalid_session_key"
+  ],
+  "GET /status / ingest+read (session-search-a)": [
+    200,
+    null
+  ],
+  "GET /status / no rule (stranger)": [
+    403,
+    "forbidden"
+  ],
+  "GET /status / read+purge (operator)": [
+    200,
+    null
+  ],
+  "POST /blob / ingest+read (session-search-a)": [
+    400,
+    "invalid_session_key"
+  ],
+  "POST /blob / no rule (stranger)": [
+    403,
+    "forbidden"
+  ],
+  "POST /blob / read+purge (operator)": [
+    403,
+    "forbidden"
+  ],
+  "POST /ingest / ingest+read (session-search-a)": [
+    400,
+    "invalid_request"
+  ],
+  "POST /ingest / no rule (stranger)": [
+    403,
+    "forbidden"
+  ],
+  "POST /ingest / read+purge (operator)": [
+    403,
+    "forbidden"
+  ],
+  "POST /search / ingest+read (session-search-a)": [
+    200,
+    null
+  ],
+  "POST /search / no rule (stranger)": [
+    403,
+    "forbidden"
+  ],
+  "POST /search / read+purge (operator)": [
+    200,
+    null
+  ],
+  "POST /state / ingest+read (session-search-a)": [
+    400,
+    "invalid_session_key"
+  ],
+  "POST /state / no rule (stranger)": [
+    403,
+    "forbidden"
+  ],
+  "POST /state / read+purge (operator)": [
+    403,
+    "forbidden"
+  ],
+  "PUT /ingest / ingest+read (session-search-a)": [
+    403,
+    "forbidden"
+  ],
+  "PUT /ingest / no rule (stranger)": [
+    403,
+    "forbidden"
+  ],
+  "PUT /ingest / read+purge (operator)": [
+    403,
+    "forbidden"
+  ]
+}
