@@ -1,0 +1,154 @@
+{
+  "archive": {
+    "body": "{\"type\":\"user\",\"uuid\":\"11111111-2222-4333-8444-555555555555\",\"sessionId\":\"0f0e0d0c-0b0a-4908-8706-050403020100\",\"timestamp\":\"2026-11-01T00:00:00.000Z\",\"cwd\":\"/work/roundtrip\",\"message\":{\"role\":\"user\",\"content\":\"hello roundtrip\"}}\n{\"type\":\"user\",\"uuid\":\"21111111-2222-4333-8444-555555555555\",\"sessionId\":\"0f0e0d0c-0b0a-4908-8706-050403020100\",\"timestamp\":\"2026-11-01T00:00:00.000Z\",\"cwd\":\"/work/roundtrip\",\"message\":{\"role\":\"user\",\"content\":\"second line of the roundtrip session\"}}\n{\"type\":\"assistant\",\"uuid\":\"31111111-2222-4333-8444-555555555555\",\"sessionId\":\"0f0e0d0c-0b0a-4908-8706-050403020100\",\"timestamp\":\"2026-11-01T00:00:01.000Z\",\"cwd\":\"/work/roundtrip\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"a reply\"}]}}\n",
+    "content_type": "application/x-ndjson",
+    "sha_header_matches": true,
+    "status": 200
+  },
+  "blobs": {
+    "toolu_01.txt": [
+      200,
+      {
+        "stored": true
+      }
+    ],
+    "toolu_02.json": [
+      200,
+      {
+        "stored": true
+      }
+    ]
+  },
+  "chunks": [
+    {
+      "archived": true,
+      "bytes": 481,
+      "end_offset": 481,
+      "generation": 0,
+      "messages": 2,
+      "offset": 0,
+      "sha256": "327b3cc8d364946ec14edd03e3336c510cc52cab1627ad6023222cb596d219de",
+      "text_messages": 2,
+      "tombstones": 0
+    },
+    {
+      "archived": true,
+      "bytes": 257,
+      "end_offset": 738,
+      "generation": 0,
+      "messages": 1,
+      "offset": 481,
+      "sha256": "cbf41912619eb12be63445b3a5512f657a1dbe073eb3380d384032ef4d0e84ca",
+      "text_messages": 1,
+      "tombstones": 0
+    }
+  ],
+  "doc": {
+    "archive_bytes": 738,
+    "archive_complete": true,
+    "archive_generation": 0,
+    "archived": true
+  },
+  "foreign_frames": [
+    200,
+    true
+  ],
+  "frames": {
+    "sessions/host-a/<session_key>/g0/000000000000.jsonl.zst": {
+      "checksum": false,
+      "content_size": 481,
+      "dictionary": false,
+      "zstd": true
+    },
+    "sessions/host-a/<session_key>/g0/000000000481.jsonl.zst": {
+      "checksum": false,
+      "content_size": 257,
+      "dictionary": false,
+      "zstd": true
+    }
+  },
+  "ingest": [
+    [
+      200,
+      {
+        "archive": "written",
+        "indexed": 2,
+        "next_offset": 481,
+        "session_key": "sk_cl5ipwq6ren5qn6azv6mbwnlxtrqycq7"
+      }
+    ],
+    [
+      200,
+      {
+        "archive": "written",
+        "indexed": 1,
+        "next_offset": 738,
+        "session_key": "sk_cl5ipwq6ren5qn6azv6mbwnlxtrqycq7"
+      }
+    ]
+  ],
+  "store": {
+    "ops": [
+      "get GET",
+      "put PUT"
+    ],
+    "signed_headers": [
+      "host;x-amz-content-sha256;x-amz-date"
+    ]
+  },
+  "tamper": {
+    "expands-past-5MiB": [
+      409,
+      "archive_tampered"
+    ],
+    "not-zstd": [
+      409,
+      "archive_tampered"
+    ],
+    "other-content": [
+      409,
+      "archive_tampered"
+    ],
+    "segment-missing": [
+      409,
+      "archive_incomplete"
+    ],
+    "segment-missing/doc": false,
+    "segment-restored": [
+      409,
+      "archive_incomplete"
+    ],
+    "side-file-missing": [
+      409,
+      "archive_incomplete"
+    ],
+    "side-file-other-content": [
+      409,
+      "archive_tampered"
+    ],
+    "store-answers-500": [
+      503,
+      "archive_unavailable"
+    ]
+  },
+  "tool_results": {
+    "content_type": "application/x-tar",
+    "members": [
+      {
+        "content": "tool output for the roundtrip\n",
+        "mode": "0o600",
+        "name": "toolu_01.txt",
+        "size": 30,
+        "type": "0"
+      },
+      {
+        "content": "{\"k\": \"v\"}\n",
+        "mode": "0o600",
+        "name": "toolu_02.json",
+        "size": 11,
+        "type": "0"
+      }
+    ],
+    "status": 200
+  }
+}

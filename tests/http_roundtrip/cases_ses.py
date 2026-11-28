@@ -1,10 +1,10 @@
 """C-SES-1, -2, -3, -6, -7: the /memory/sessions/v1 sub-app, without an
 archive backend (SESSION_ARCHIVE_BACKEND=none, or unset for the 503 branch).
 
-Not here yet: C-SES-4 (redaction vectors through the HTTP path), C-SES-5 (the
-ccs client's own tests), C-SES-8 (archive objects, which need fake S3/GCS) and
-C-SES-9 (purge ordering against an archive). contracts/README.md lists them
-as not covered by this suite."""
+C-SES-8 and C-SES-9 (archive objects, purge ordering) are in cases_archive.py,
+C-SES-5 (the ccs client) in cases_ccs.py. C-SES-4 (redaction ruleset r1) is not
+in run.py: each language's conformance test consumes the frozen vectors
+(contracts/specs/C-SES-4.md)."""
 
 from __future__ import annotations
 

@@ -1,0 +1,45 @@
+{
+  "ingest": {
+    "exit": 0
+  },
+  "objects": [
+    "sessions/host-a/<session_key>/g0/000000000000.jsonl.zst",
+    "sessions/host-a/<session_key>/tool-results/toolu_01.txt.zst",
+    "sessions/host-a/<session_key>/tool-results/toolu_02.json.zst"
+  ],
+  "preview": {
+    "exit": 0,
+    "session_key": "sk_cl5ipwq6ren5qn6azv6mbwnlxtrqycq7",
+    "snippets": 1
+  },
+  "purge_without_scope": {
+    "doc_still_there": true,
+    "exit": 3
+  },
+  "resume": {
+    "exit": 0,
+    "restored_matches_archive": true,
+    "restored_sha256": "ad91c3680aaa9cc86e20007f1a578e2ad85e7453148b484e1ac1c03bccaa1831",
+    "side_files": {
+      "toolu_01.txt": "tool output for the roundtrip\n",
+      "toolu_02.json": "{\"k\": \"v\"}\n"
+    }
+  },
+  "search": {
+    "exit": 0,
+    "keys": [
+      "sk_cl5ipwq6ren5qn6azv6mbwnlxtrqycq7"
+    ]
+  },
+  "server_doc": {
+    "archive_bytes": 795,
+    "archive_complete": true,
+    "archived": true,
+    "host": "host-a",
+    "message_count": 3,
+    "project_dir": "-work-roundtrip"
+  },
+  "status": {
+    "exit": 0
+  }
+}

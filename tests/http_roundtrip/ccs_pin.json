@@ -1,0 +1,5 @@
+{
+  "comment": "The ccs client C-SES-5 runs. Bump the commit deliberately; the case extracts it with git archive from HTTP_ROUNDTRIP_CCS_REPO.",
+  "repository": "https://github.com/shin1ohno/session-search",
+  "commit": "704a9cc32d05a5bafd707facb7807cd9afa35b1c"
+}

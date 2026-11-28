@@ -62,6 +62,16 @@ class Runner:
         self.hydra = FakeHydra(self.keys[0], ISSUER, {"memory-mirror": MIRROR_SECRET})
         self.procs: dict[str, lib.Proc] = {}
         self.urls: dict[str, str] = {}
+        self._archive = None
+
+    @property
+    def archive(self):
+        """The fake object stores (C-SES-8/9), created on first use: issuing its
+        TLS certificates costs a few seconds of pure-Python RSA."""
+        if self._archive is None:
+            from fake_archive import FakeArchive
+            self._archive = FakeArchive(os.path.join(self.log_dir, "archive-tls"))
+        return self._archive
 
     # -- environment of the processes under test -------------------------- #
     def _base_env(self):
@@ -154,6 +164,8 @@ class Runner:
             self.stop(key)
         for f in (self.es, self.voyage, self.jwks, self.upstream, self.hydra):
             f.close()
+        if self._archive is not None:
+            self._archive.close()
 
 
 def load_cases():
@@ -165,6 +177,8 @@ def load_cases():
     import cases_mcp  # noqa: F401
     import cases_ops  # noqa: F401
     import cases_ses  # noqa: F401
+    import cases_archive  # noqa: F401  (after cases_ses, which it imports)
+    import cases_ccs  # noqa: F401
     return lib.CASES
 
 

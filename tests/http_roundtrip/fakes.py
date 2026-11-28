@@ -235,6 +235,9 @@ class FakeES(Fake):
                 hit = [self._match(c, src, _id) for c in shoulds]
                 if not any(ok for ok, _ in hit) and not arg.get("must") and not arg.get("filter"):
                     return False, 0.0
+                msm = arg.get("minimum_should_match")
+                if msm is not None and sum(1 for ok, _ in hit if ok) < int(msm):
+                    return False, 0.0
                 score += sum(s for ok, s in hit if ok)
             unknown = set(arg) - {"must", "filter", "must_not", "should", "minimum_should_match"}
             if unknown:
@@ -259,6 +262,26 @@ class FakeES(Fake):
             have = _get_path(src, field)
             have = have if isinstance(have, list) else [have]
             return any(v in have for v in values), 1.0
+        if kind == "multi_match":
+            # best_fields: a field matches when it holds the query's tokens (all of
+            # them with operator "and"); the score is the best field's boosted hits.
+            tokens = _tokens(arg["query"])
+            best, ok_any = 0.0, False
+            for spec in arg.get("fields", []):
+                field, _, boost = spec.partition("^")
+                have = _tokens(_get_path(src, field) or "")
+                present = [t for t in tokens if t in have]
+                ok = bool(tokens) and (len(present) == len(tokens) if arg.get("operator") == "and" else bool(present))
+                if ok:
+                    ok_any = True
+                    best = max(best, float(boost or 1) * sum(have.count(t) for t in tokens))
+            return ok_any, best
+        if kind == "prefix":
+            (field, value), = arg.items()
+            if isinstance(value, dict):
+                value = value.get("value")
+            have = _get_path(src, field)
+            return isinstance(have, str) and have.startswith(value), 1.0
         if kind == "exists":
             v = _get_path(src, arg["field"])
             return v is not None and v != [], 1.0
@@ -313,16 +336,53 @@ class FakeES(Fake):
                              reverse=(direction == "desc"))
             else:
                 out.sort(key=lambda r: (-r[4], r[3]))
+        unknown = set(body) - {"size", "_source", "query", "knn", "sort", "seq_no_primary_term", "from",
+                               "track_total_hits", "collapse", "aggs", "highlight"}
+        if unknown:
+            raise QueryShapeError(f"search keys {sorted(unknown)}")
+        if body.get("collapse"):
+            field, seen, kept = body["collapse"]["field"], set(), []
+            for row in out:
+                v = _get_path(row[2], field)
+                if v not in seen:
+                    seen.add(v)
+                    kept.append(row)
+            out = kept
         total = len(out)
         hits = []
+        hl = body.get("highlight")
+        tokens = _tokens(_query_text(body.get("query"))) if hl else []
         for name, _id, src, _o, score in out[:size]:
             hit = {"_index": name, "_id": _id, "_score": score,
                    "_source": _project(src, body.get("_source"))}
             if body.get("seq_no_primary_term"):
                 hit["_seq_no"], hit["_primary_term"] = self.indices[name]["seq"].get(_id, (0, 1))
+            if hl:
+                frags = {}
+                for field in hl.get("fields", {}):
+                    text = _get_path(src, field)
+                    if isinstance(text, str) and any(t in _tokens(text) for t in tokens):
+                        marked = re.sub(r"\w+", lambda m: f"<em>{m.group(0)}</em>"
+                                        if m.group(0).lower() in tokens else m.group(0), text)
+                        frags[field] = [marked[:hl.get("fragment_size", 100) * 2]]
+                if frags:
+                    hit["highlight"] = frags
             hits.append(hit)
-        return {"took": 1, "timed_out": False,
-                "hits": {"total": {"value": total, "relation": "eq"}, "max_score": None, "hits": hits}}
+        res = {"took": 1, "timed_out": False,
+               "hits": {"total": {"value": total, "relation": "eq"}, "max_score": None, "hits": hits}}
+        if body.get("aggs"):
+            res["aggregations"] = {}
+            for agg_name, spec in body["aggs"].items():
+                if set(spec) != {"terms"}:
+                    raise QueryShapeError(f"aggregation {sorted(spec)}")
+                counts: dict = {}
+                for row in out:
+                    v = _get_path(row[2], spec["terms"]["field"])
+                    counts[v] = counts.get(v, 0) + 1
+                buckets = sorted(({"key": k, "doc_count": n} for k, n in counts.items()),
+                                 key=lambda b: (-b["doc_count"], str(b["key"])))
+                res["aggregations"][agg_name] = {"buckets": buckets[:spec["terms"].get("size", 10)]}
+        return res
 
     def _apply_script(self, src, script):
         source = script.get("source", "")
@@ -343,7 +403,27 @@ class FakeES(Fake):
             raise QueryShapeError(f"script {source[:60]!r}")
 
     # -- dispatch --------------------------------------------------------- #
+    def hold(self, pred):
+        """Stop the next request matching pred(rec) until release() (C-SES-9's
+        competing writer). arrived is set while it is held."""
+        with self.lock:
+            self._hold = {"pred": pred, "arrived": threading.Event(), "go": threading.Event()}
+            return self._hold
+
+    def release(self):
+        with self.lock:
+            h, self._hold = getattr(self, "_hold", None), None
+        if h:
+            h["go"].set()
+
     def handle(self, h, rec):
+        with self.lock:
+            gate = getattr(self, "_hold", None)
+            hit = gate is not None and not gate["arrived"].is_set() and gate["pred"](rec)
+            if hit:
+                gate["arrived"].set()
+        if hit:
+            gate["go"].wait(30)
         delay = self.mode.get("delay")
         if delay and delay[0] in rec.path:
             time.sleep(delay[1])
@@ -395,6 +475,15 @@ class FakeES(Fake):
                 if not names:
                     return 404, {"error": "no such index"}
                 return 200, {n: {"mappings": (self.indices[n]["def"] or {}).get("mappings", {})} for n in names}
+            if op == "_mget" and m in ("POST", "GET"):
+                fields = rec.query.get("_source")
+                spec = fields.split(",") if fields else None
+                docs = []
+                for _id in body["ids"]:
+                    src = next((self.indices[n]["docs"][_id] for n in names if _id in self.indices[n]["docs"]), None)
+                    docs.append({"_index": parts[0], "_id": _id, "found": src is not None,
+                                 **({"_source": _project(src, spec)} if src is not None else {})})
+                return 200, {"docs": docs}
             if op == "_search":
                 if not names:
                     return 404, {"error": {"type": "index_not_found_exception"}}
@@ -524,6 +613,26 @@ class FakeES(Fake):
             i += 2
         return 200, {"took": 1, "errors": any("error" in next(iter(it.values())) for it in items),
                      "items": items}
+
+
+def _query_text(q):
+    """The free text of the multi_match/match clauses in a query (for highlight)."""
+    if isinstance(q, dict):
+        for kind, arg in q.items():
+            if kind == "multi_match":
+                return arg.get("query", "")
+            if kind == "match":
+                (_f, v), = arg.items()
+                return v.get("query", "") if isinstance(v, dict) else v
+            found = _query_text(arg)
+            if found:
+                return found
+    if isinstance(q, list):
+        for c in q:
+            found = _query_text(c)
+            if found:
+                return found
+    return ""
 
 
 def _cosine(a, b):

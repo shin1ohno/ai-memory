@@ -36,6 +36,10 @@ TEST_SECRETS = {
     "ES password": "roundtrip-es-password",
     "Voyage key": "roundtrip-voyage-key",
     "HS256 test key": "roundtrip-hs-key",
+    "S3 test secret key": "roundtrip-s3-secret-key",
+    "GCS test token": "roundtrip-gcs-access-token",
+    "ccs client secret": "roundtrip-ccs-client-secret",
+    "ccs HMAC key": "roundtrip-ccs-hmac-key",
 }
 PATTERNS = {
     "jwt": re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"),
