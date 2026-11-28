@@ -2,3 +2,4 @@
 .venv-proxy/
 __pycache__/
 .venv-audit/
+rust/target/
