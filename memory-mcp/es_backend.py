@@ -16,6 +16,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -229,32 +230,82 @@ def _index_for(memory_type: str | None) -> str:
     }.get(memory_type, ALL_ALIAS)
 
 
+# ES exception type names are its exception class names in snake_case
+# (`security_exception`, `version_conflict_engine_exception`).
+_ES_TYPE_RE = re.compile(r"[a-z][a-z0-9_]{0,70}_exception")
+
+
+def _es_type_token(value: Any) -> str:
+    """An ES exception type name, or `?` when the value does not look like one.
+
+    The body is untrusted text: a proxy's page or a malformed reply must not
+    smuggle content into the log through the one field that is logged verbatim,
+    so only the shape ES itself produces passes.
+    """
+    if isinstance(value, str) and _ES_TYPE_RE.fullmatch(value):
+        return value
+    return "?"
+
+
+def _es_error_summary(resp: httpx.Response) -> str:
+    """`error_type=... root_cause=... reason_len=...` for an ES error reply.
+
+    Never the body and never `reason` itself: ES quotes the failing input there
+    (a mapping error previews the field value, a query-parse error echoes the
+    query), so either could carry a document or a search term into the log.
+    """
+    try:
+        err = resp.json().get("error")
+    except Exception:  # noqa: BLE001 — not JSON (proxy page, truncated reply)
+        return f"error_type=? root_cause=? reason_len=? body_len={len(resp.content)}"
+    if isinstance(err, str):  # `{"error": "..."}` form, no structure to read
+        return f"error_type=? root_cause=? reason_len={len(err)}"
+    if not isinstance(err, dict):
+        return "error_type=? root_cause=? reason_len=?"
+    reason = err.get("reason")
+    roots = err.get("root_cause")
+    root_types: list[str] = []
+    if isinstance(roots, list):
+        for r in roots:
+            t = _es_type_token(r.get("type") if isinstance(r, dict) else None)
+            if t not in root_types:
+                root_types.append(t)
+    return (f"error_type={_es_type_token(err.get('type'))} "
+            f"root_cause={','.join(root_types[:3]) or '-'} "
+            f"reason_len={len(reason) if isinstance(reason, str) else '?'}")
+
+
 def _raise_for_status(resp: httpx.Response, method: str, path: str) -> None:
-    """`raise_for_status()`, but log ES's own reason first.
+    """`raise_for_status()`, but log what kind of error ES returned first.
 
     httpx's error message carries only the status and the URL, so an
     authorization failure reaches the MCP caller as a bare
     `403 Forbidden for url .../_update_by_query` with no way to tell WHICH
-    principal ES rejected or WHICH action it wanted. ES puts both in the
-    response body (`action [indices:data/write/update/byquery] is unauthorized
-    for user [...]`) and that body was being discarded.
+    principal ES rejected or WHICH kind of failure it was.
 
     This is the auth-boundary rule applied server-side: a reject at an
     authn/authz boundary logs its variant unconditionally, never behind a
-    debug flag. The body is truncated and carries no credential — ES echoes the
-    denied action, the principal and the index, not the password.
+    debug flag. The variant is `error.type` and the root-cause types; with
+    the method, the ES path and the configured principal (`es_user`, the name,
+    never the password) that is enough to tell an authorization reject from a
+    mapping or parse error and to reproduce it with `_has_privileges`.
+
+    The body itself is NOT logged (it was, as `body=` up to 800 chars, from
+    2026-08-17 to 2026-11-28): ES error bodies quote the failing input, and
+    these lines go to a persistent log file on the host. The query string is
+    dropped from the path for the same reason; callers build it from ES
+    parameters, but a log line should not depend on that staying true.
 
     Observed 2026-08-17: `revise`/`forget` on memory-knowledge returned 403
     through the server while the SAME endpoint, as the SAME configured
     ES_USER, returned 200 from curl (privileges verified with
     `_has_privileges`, live role checked, no index write-block, credential not
-    stale). With the body dropped there was nothing left to diagnose from.
+    stale). With nothing logged there was nothing left to diagnose from.
     """
     if resp.is_error:
-        detail = resp.text[:800].replace("\n", " ")
         print(
-            f"ES-ERROR status={resp.status_code} {method} {path} "
-            f"es_user={ES_USER} body={detail}",
+            f"ES-ERROR status={resp.status_code} {method} {path.split('?', 1)[0]} "
+            f"es_user={ES_USER} {_es_error_summary(resp)}",
             file=sys.stderr,
             flush=True,
         )
