@@ -1,0 +1,25 @@
+[Unit]
+Description=ai-memory noop: proves the compiled-binary distribution path on this host (Rust migration W2, M7)
+# The noop binary reads no secret and opens no connection, so the unit has no
+# EnvironmentFile and no ordering on the memory services. It is retired at the
+# W3 switchover, when the auth proxy becomes the first real binary.
+
+[Service]
+Type=simple
+User=nobody
+Group=nogroup
+# setup's lxc-es-memory cookbook stages the release assets under
+# /opt/es-memory/bin/<source_sha>/ and points bin/current at the pinned one, then
+# restarts this unit whenever /proc/<MainPID>/exe is not the file under current.
+ExecStart=/opt/es-memory/bin/current/ai-memory-noop
+Restart=on-failure
+RestartSec=5
+MemoryMax=64M
+LimitNOFILE=1024
+TasksMax=16
+# Namespace hardening (NoNewPrivileges/ProtectSystem/ProtectHome/PrivateTmp)
+# intentionally omitted: they fail with status=226/NAMESPACE inside privileged
+# PVE LXCs, as in memory-mcp-v2.service.
+
+[Install]
+WantedBy=multi-user.target
