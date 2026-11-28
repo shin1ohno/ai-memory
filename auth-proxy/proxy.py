@@ -331,6 +331,25 @@ HOP_BY_HOP = frozenset(
     ("host", "authorization", "transfer-encoding", "connection", "keep-alive")
 )
 
+# uvicorn trusts 127.0.0.1, i.e. this proxy, so whatever forwarding headers the
+# proxy sends become the server's scheme and client address. The inbound ones
+# are dropped and the proxy writes X-Forwarded-Proto / X-Forwarded-For itself;
+# X-Forwarded-Host and Forwarded are never sent, so no layer added upstream
+# later can let a client choose the host of a Location.
+FORWARDING = frozenset(
+    ("x-forwarded-proto", "x-forwarded-for", "x-forwarded-host", "forwarded")
+)
+
+
+def forwarded_proto(request: web.Request) -> str:
+    """https only when the TLS-terminating front says so (nginx's 443 server
+    sends exactly that); anything else is this proxy's own scheme. A client that
+    reaches the port directly can pick between the two schemes the deployment
+    really serves, never ws, wss or a URL."""
+    claimed = request.headers.get("X-Forwarded-Proto", "").strip().lower()
+    return "https" if claimed == "https" else request.scheme
+
+
 # MCP uses JSON-RPC 2.0, whose error objects require a numeric `code`. Returning
 # a plain {"error": "..."} body on 401 makes MCP clients reject the response
 # with "code: Field required" before they can act on the WWW-Authenticate
@@ -373,18 +392,11 @@ async def handle(request: web.Request) -> web.StreamResponse:
                 },
                 headers=add_cors({"Cache-Control": "public, max-age=3600"}),
             )
-        # Proxy other .well-known paths to upstream without auth
-        session: ClientSession = request.app["http_client"]
-        url = f"{UPSTREAM_URL}{request.path_qs}"
-        upstream = await session.request("GET", url, timeout=ClientTimeout(total=10))
-        content = await upstream.read()
-        await upstream.release()
-        return web.Response(
-            body=content,
-            status=upstream.status,
-            content_type=upstream.headers.get("Content-Type", "application/json"),
-            headers=CORS_HEADERS,
-        )
+        # Nothing else under /.well-known/ is served: FastMCP without auth has no
+        # discovery routes. Forwarding was also an authentication bypass, since
+        # the test above reads request.path but the URL was built from path_qs,
+        # so /.well-known/../mcp reached any upstream path without a token.
+        return web.json_response({"error": "not_found"}, status=404, headers=CORS_HEADERS)
 
     # ── Authenticate ──
     auth = request.headers.get("Authorization", "")
@@ -465,9 +477,15 @@ async def handle(request: web.Request) -> web.StreamResponse:
         k: v
         for k, v in request.headers.items()
         if k.lower() not in HOP_BY_HOP
+        and k.lower() not in FORWARDING
         and not k.lower().startswith("x-verified-")
         and k.lower() != HEADER_PROXY_SECRET.lower()
     }
+    fwd_headers["X-Forwarded-Proto"] = forwarded_proto(request)
+    # The peer this proxy sees (nginx, or a client that came straight to the
+    # port), not a value the client wrote. Nothing upstream reads the address.
+    if request.remote:
+        fwd_headers["X-Forwarded-For"] = request.remote
     fwd_headers["X-Verified-Sub"] = sub
     fwd_headers["X-Verified-Client-Id"] = client_id
     fwd_headers["X-Verified-Grant"] = grant
@@ -507,11 +525,15 @@ async def handle(request: web.Request) -> web.StreamResponse:
             pass
 
     try:
+        # A redirect goes back to the client as is. Following it here would
+        # resend X-Proxy-Secret, X-Verified-* and the body to whatever Location
+        # upstream names (aiohttp drops only Authorization and Cookie off-origin).
         upstream = await session.request(
             request.method,
             url,
             headers=fwd_headers,
             data=body,
+            allow_redirects=False,
             timeout=ClientTimeout(total=300, connect=10),
         )
     except Exception as exc:
